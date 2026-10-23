@@ -29,7 +29,9 @@ export const studioToolNames = [
   'add_color_matte',
   'pr_guide',
   'export_deliverables',
-  'export_status'
+  'export_status',
+  'add_scene_color_layers',
+  'sync_color_layers'
 ] as const;
 
 export function isStudioTool(name: string): boolean {
@@ -253,7 +255,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     {
       name: 'add_color_layer',
       description:
-        'Lay a colour-grading adjustment layer over the whole sequence (or a time range) on its own top track, with Lumetri Color ready to grade — the "layer edit màu" anh puts above the cut. Uses the project\'s Adjustment Layer item, importing one from Mako\'s template when the project has none (Premiere has no scripting call that creates one). Optional Lumetri Basic values (temperature, tint, exposure, contrast, highlights, shadows, whites, blacks, saturation, vibrance) and a Lumetri preset/LUT look.',
+        'One colour layer over the whole sequence or a time range (a global look). For grading, anh works per scene: use add_scene_color_layers. Lays a colour-grading adjustment layer over the whole sequence (or a time range) on its own top track, with Lumetri Color ready to grade — the "layer edit màu" anh puts above the cut. Uses the project\'s Adjustment Layer item, importing one from Mako\'s template when the project has none (Premiere has no scripting call that creates one). Optional Lumetri Basic values (temperature, tint, exposure, contrast, highlights, shadows, whites, blacks, saturation, vibrance) and a Lumetri preset/LUT look.',
       inputSchema: z.object({
         ...seqRef,
         start: z.number().optional().describe('Start in seconds (default 0)'),
@@ -318,6 +320,27 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
       description: 'Progress of an export_deliverables job: waiting for the Media Encoder master, encoding (which deliverable), done or failed, with the finished files and their measured LUFS.',
       inputSchema: z.object({ jobId: z.string(), waitSeconds: z.number().optional().describe('Wait up to this long first (default 0)') })
     }
+    ,{
+      name: 'add_scene_color_layers',
+      description:
+        'Grade per scene the way anh does: one adjustment layer with Lumetri Color per SOURCE on a new top track, named "Màu <source>". Neighbouring clips from the same source share one layer; the same source used again elsewhere on the timeline gets a layer with the same name and the same Lumetri values (keep them identical with sync_color_layers after grading one); a different source always gets its own layer. Titles/adjustment layers/graphics are skipped. Optional Lumetri Basic values for all (basic) or per source file name (perSource).',
+      inputSchema: z.object({
+        ...seqRef,
+        sourceTrack: z.number().int().min(0).optional().describe('Video track holding the footage (default 0 = V1)'),
+        basic: z.record(z.string(), z.number()).optional().describe('Lumetri Basic values for every scene'),
+        perSource: z.record(z.string(), z.record(z.string(), z.number())).optional().describe('{ "FS_C0661": { exposure: 0.3 } } — by file name without extension')
+      })
+    },
+    {
+      name: 'sync_color_layers',
+      description:
+        'Make every colour layer of the same scene identical again after grading one of them: for each "Màu <source>" name, copies ALL Lumetri Color parameters (basic, creative, curves, wheels, HSL, vignette) from the master instance to the other instances of that name. master: a clip name + index or the instance under the playhead; default the first instance of each name. Different sources are never touched by each other.',
+      inputSchema: z.object({
+        ...seqRef,
+        name: z.string().optional().describe('Only this layer name, e.g. "Màu FS_C0661" (default every "Màu …" group)'),
+        fromPlayhead: z.boolean().optional().describe('Use the instance under the playhead as the master for its group (default false: the first instance)')
+      })
+    }
   ];
   return tools.filter((t) => !existingNames.has(t.name));
 }
@@ -338,6 +361,8 @@ export async function executeStudioTool(bridge: PremiereProTransport, name: stri
       case 'pr_guide': return prGuide(args);
       case 'export_deliverables': return await exportDeliverables(bridge, args);
       case 'export_status': return await exportStatus(args);
+      case 'add_scene_color_layers': return await addSceneColorLayers(bridge, args);
+      case 'sync_color_layers': return await syncColorLayers(bridge, args);
     }
     return { success: false, error: 'unknown studio tool ' + name };
   } catch (e: any) {
@@ -836,3 +861,58 @@ function exportStatus(args: Record<string, any>) {
   return waitJob(j, (args.waitSeconds ?? 0) * 1000).then((v) => ({ success: true, tool: 'export_status', ...v }));
 }
 
+
+// ---------------------------------------------------------------- per-scene colour
+
+async function addSceneColorLayers(bridge: PremiereProTransport, args: Record<string, any>) {
+  for (const k of Object.keys(args.basic ?? {})) if (!LUMETRI_NAMES[k]) return { success: false, error: `unknown Lumetri control '${k}'` };
+  const body = `${SEQ_PICK(args)}${FIND_ADJ}
+var adj=__adjOrMake();if(!adj)return JSON.stringify({success:false,needsAdjustmentLayer:true,error:'No Adjustment Layer in the project and Mako could not import its template.'});
+var src=s.videoTracks[${args.sourceTrack ?? 0}];if(!src)return JSON.stringify({success:false,error:'no such source track'});
+var fd=s.getSettings().videoFrameRate.seconds;
+function base(p){var q=String(p);q=q.substring(Math.max(q.lastIndexOf('/'),q.lastIndexOf(String.fromCharCode(92)))+1);var d=q.lastIndexOf('.');return d>0?q.substring(0,d):q;}
+var segs=[];
+for(var i=0;i<src.clips.numItems;i++){var c=src.clips[i];if(c.disabled||__isAdj(c))continue;var p=null;try{p=c.projectItem.getMediaPath();}catch(e){}if(!p)continue;
+ var key=base(p);var last=segs.length?segs[segs.length-1]:null;
+ if(last&&last.key===key&&c.start.seconds-last.end<=fd*1.5)last.end=c.end.seconds;else segs.push({key:key,start:c.start.seconds,end:c.end.seconds});}
+if(!segs.length)return JSON.stringify({success:false,error:'no footage clips on that track'});
+app.enableQE();app.project.openSequence(s.sequenceID);var qs=qe.project.getActiveSequence();
+qs.addTracks(1,s.videoTracks.numTracks,0);var ti=s.videoTracks.numTracks-1;var tr=s.videoTracks[ti];var qt=qs.getVideoTrackAt(ti);
+var adjW=0,adjH=0;try{var vi=String(adj.getProjectMetadata()).match(/VideoInfo>\\s*(\\d+)\\s*x\\s*(\\d+)/);if(vi){adjW=+vi[1];adjH=+vi[2];}}catch(e0){}
+var basic=${q(args.basic ?? {})};var per=${q(args.perSource ?? {})};var names=${q(LUMETRI_NAMES)};var made=[];var groups={};
+for(var k=0;k<segs.length;k++){var g=segs[k];
+ try{adj.setInPoint(0,4);adj.setOutPoint(Math.max(0.1,g.end-g.start),4);}catch(e1){}
+ tr.overwriteClip(adj,g.start);var c2=null;for(var j=0;j<tr.clips.numItems;j++)if(Math.abs(tr.clips[j].start.seconds-g.start)<0.02)c2=tr.clips[j];
+ if(!c2){made.push({scene:g.key,error:'not placed'});continue;}
+ if(Math.abs(c2.end.seconds-g.end)>0.001){try{c2.end=__T(g.end);}catch(e2){}}
+ c2.name='Màu '+g.key;
+ if(adjW>0){var sc=Math.max(s.frameSizeHorizontal/adjW,s.frameSizeVertical/adjH)*100;if(sc>100.01){try{__prop(__comp(c2,'Motion'),'Scale').setValue(sc,true);}catch(e3){}}}
+ for(var m=0;m<qt.numItems;m++){var it=qt.getItemAt(m);if(it.type!='Empty'&&Math.abs(it.start.secs-g.start)<0.02){it.addVideoEffect(qe.project.getVideoEffectByName('Lumetri Color'));break;}}
+ var L=__comp(c2,'Lumetri Color');var v={};for(var a in basic)v[a]=basic[a];var ps=per[g.key]||{};for(var b in ps)v[b]=ps[b];
+ if(L){for(var n in v){var pp=__prop(L,names[n]);if(pp){try{pp.setValue(v[n],true);}catch(e4){}}}}
+ groups[g.key]=(groups[g.key]||0)+1;made.push({layer:c2.name,start:g.start,end:g.end,lumetri:!!L});}
+try{adj.clearInPoint();adj.clearOutPoint();}catch(e5){}
+return JSON.stringify({success:true,track:ti,layers:made,scenes:groups});`;
+  const r = await jsx(bridge, body, 300000);
+  return { tool: 'add_scene_color_layers', ...r };
+}
+
+async function syncColorLayers(bridge: PremiereProTransport, args: Record<string, any>) {
+  const body = `${SEQ_PICK(args)}
+var only=${q(args.name ?? null)};var usePh=${args.fromPlayhead === true};var ph=s.getPlayerPosition().seconds;
+var groups={};
+for(var t=0;t<s.videoTracks.numTracks;t++){var tr=s.videoTracks[t];for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];
+ if(c.name.indexOf('Màu ')!==0)continue;if(only&&c.name!==only)continue;if(!__comp(c,'Lumetri Color'))continue;
+ (groups[c.name]=groups[c.name]||[]).push(c);}}
+var out=[];
+for(var g in groups){var list=groups[g];if(list.length<2){out.push({layer:g,instances:1,synced:0});continue;}
+ var master=list[0];if(usePh){for(var j=0;j<list.length;j++)if(list[j].start.seconds<=ph&&list[j].end.seconds>ph)master=list[j];}
+ var ML=__comp(master,'Lumetri Color');var vals=[];for(var p=0;p<ML.properties.numItems;p++){var v=null;try{v=ML.properties[p].getValue();}catch(e){v=undefined;}vals.push(v);}
+ var n=0,fail=0;
+ for(var k=0;k<list.length;k++){if(list[k]===master)continue;var L=__comp(list[k],'Lumetri Color');
+  for(var q2=0;q2<L.properties.numItems&&q2<vals.length;q2++){if(vals[q2]===undefined||vals[q2]===null)continue;try{L.properties[q2].setValue(vals[q2],true);}catch(e2){fail++;}}n++;}
+ out.push({layer:g,instances:list.length,master:master.start.seconds,synced:n,skippedParams:fail});}
+return JSON.stringify({success:true,groups:out});`;
+  const r = await jsx(bridge, body, 300000);
+  return { tool: 'sync_color_layers', ...r };
+}

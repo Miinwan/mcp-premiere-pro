@@ -11,7 +11,7 @@ const take = (stt: number, file: string, n: number, vao: number, ra: number, tin
 describe('studio tools', () => {
   it('registers the four tools', () => {
     const names = getStudioTools(new Set()).map((t) => t.name);
-    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status']);
+    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers']);
     expect(isStudioTool('rough_cut_by_cues')).toBe(true);
     expect(getStudioTools(new Set(['describe_sources'])).map((t) => t.name)).not.toContain('describe_sources');
   });
