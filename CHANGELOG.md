@@ -5,6 +5,7 @@ All notable changes are documented here. Releases use semantic versioning.
 
 ## [Unreleased] — Minwan (23/10/2026)
 
+- `export_deliverables` / `export_status`: master ProRes 422 HQ qua Adobe Media Encoder, deliverable chạy nền bằng ffmpeg với cùng bảng preset và cách đặt tên như MCP After Effects; âm lượng đo trước, mix thô được nén nhẹ rồi chuẩn hoá.
 - `rough_cut_by_cues`: gọi engine Media của MCP Adobe nghe khẩu lệnh (3-2-1, action, diễn, đi / cắt, ok) trong audio gốc, dựng sequence mới với mọi take nối tiếp a→z, marker từng take (đỏ khi độ tin cậy thấp), khung sequence và Motion scale/vị trí theo Media; đặt take theo điểm kết thúc thật nên không hở.
 - `describe_sources`: mô tả từng shot qua Media (nhanh hoặc kỹ với Qwen3.5-2B), ghi vào cột Comment và Log Note của Project panel.
 - `send_to_after_effects` / `return_from_after_effects`: cầu nối với MCP After Effects qua file handoff; bản render đặt lên track trên, bản gốc chỉ bị tắt.

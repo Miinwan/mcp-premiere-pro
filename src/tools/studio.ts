@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { PremiereProTransport } from '../bridge/types.js';
 import type { MCPTool } from './index.js';
 import { encodeRgbaPng } from './expanded.js';
+import { exportJob, PRESETS as DELIVERABLES, startExportJob, waitJob } from './deliverables.js';
 
 /**
  * Studio tools (Minwan): rough cut from slate cues and shot descriptions via
@@ -26,7 +27,9 @@ export const studioToolNames = [
   'add_color_layer',
   'mako',
   'add_color_matte',
-  'pr_guide'
+  'pr_guide',
+  'export_deliverables',
+  'export_status'
 ] as const;
 
 export function isStudioTool(name: string): boolean {
@@ -293,6 +296,28 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         'Premiere knowledge base (folder Premiere/Kiến thức — drop .md files there, no build): which transitions exist and when to use them (Film Impact is built into Premiere 2026), which plugins/panels MCP can drive (Mako) and which are manual (Animation/Premiere Composer), export rules. Call with no topic to list topics, then with a topic name to read it. Read it before choosing transitions or plugins.',
       inputSchema: z.object({ topic: z.string().optional().describe('Topic (file name without .md); omit to list') })
     }
+    ,{
+      name: 'export_deliverables',
+      description:
+        'Export a sequence for delivery: one ProRes 422 HQ master straight from Premiere (exportAsMediaDirect with the built-in "Match Source - Apple ProRes 422 HQ" preset), then every requested deliverable from it — youtube_4k, youtube_1080, reels (1080x1920), feed_4x5, square, led (screen width/height), review (720p, watermark + timecode), master, png_alpha — with sizes, bitrates and -14 LUFS loudness from pr_guide "Xuất file". Files are named "<Khách> <Tên video> <Tỉ lệ> V<n>" (next free version) and logged with the measured LUFS in "Kết quả xuất.md". Export the 9x16 / 1x1 sequences for vertical and square (create_aspect_versions) — another aspect is letterboxed.',
+      inputSchema: z.object({
+        ...seqRef,
+        presets: z.array(z.string()).describe('Deliverables to make'),
+        client: z.string().describe('Client name for the file name'),
+        title: z.string().describe('Video name for the file name'),
+        outputDir: z.string().optional().describe('Folder (default "<project folder>/Xuất file")'),
+        version: z.number().int().optional().describe('Force the version number'),
+        width: z.number().int().optional().describe('led: screen width'),
+        height: z.number().int().optional().describe('led: screen height'),
+        watermark: z.string().optional().describe('review: watermark text'),
+        waitSeconds: z.number().optional().describe('How long to wait in this call (default 40); the export keeps running — check with export_status')
+      })
+    },
+    {
+      name: 'export_status',
+      description: 'Progress of an export_deliverables job: waiting for the Media Encoder master, encoding (which deliverable), done or failed, with the finished files and their measured LUFS.',
+      inputSchema: z.object({ jobId: z.string(), waitSeconds: z.number().optional().describe('Wait up to this long first (default 0)') })
+    }
   ];
   return tools.filter((t) => !existingNames.has(t.name));
 }
@@ -311,6 +336,8 @@ export async function executeStudioTool(bridge: PremiereProTransport, name: stri
       case 'mako': return await runMako(bridge, args);
       case 'add_color_matte': return await addColorMatte(bridge, args);
       case 'pr_guide': return prGuide(args);
+      case 'export_deliverables': return await exportDeliverables(bridge, args);
+      case 'export_status': return await exportStatus(args);
     }
     return { success: false, error: 'unknown studio tool ' + name };
   } catch (e: any) {
@@ -774,3 +801,38 @@ function prGuide(args: Record<string, any>) {
   if (!hit) return { success: false, error: `no topic '${args.topic}'`, topics: files.map((f) => f.replace(/\.md$/, '')) };
   return { success: true, topic: hit.replace(/\.md$/, ''), text: readFileSync(join(GUIDE_DIR, hit), 'utf8') };
 }
+
+// ---------------------------------------------------------------- deliverables
+
+const PRORES_MASTER_EPR = '/Applications/Adobe Premiere Pro 2026/Adobe Premiere Pro 2026.app/Contents/Settings/EncoderPresets/ConsolidateAndTranscode/Match Source - Apple ProRes 422 HQ.epr';
+
+async function exportDeliverables(bridge: PremiereProTransport, args: Record<string, any>) {
+  const ids = (args.presets as string[]) ?? [];
+  const bad = ids.filter((i) => !DELIVERABLES[i]);
+  if (!ids.length || bad.length) return { success: false, error: `presets must be some of ${Object.keys(DELIVERABLES).join(', ')}${bad.length ? ` (unknown: ${bad.join(', ')})` : ''}` };
+  const epr = process.env.PR_MASTER_EPR || PRORES_MASTER_EPR;
+  if (!existsSync(epr)) return { success: false, error: `master preset missing: ${epr} (set PR_MASTER_EPR)` };
+  // The master goes through Adobe Media Encoder so Premiere stays free; the
+  // deliverables follow in the background once the file stops growing.
+  const body = `${SEQ_PICK(args)}
+var dir=${q(args.outputDir ?? null)};if(!dir){var pp=String(app.project.path);dir=pp.replace(/[\\/\\\\][^\\/\\\\]*$/,'')+'/Xuất file';}
+var f=new Folder(dir+'/.master');if(!f.exists)f.create();
+var out=f.fsName+'/'+s.name.replace(/[\\\\\\/:*?"<>|]/g,' ')+'.mov';
+var old=new File(out);if(old.exists)old.remove();
+var via='ame';var r=null;
+try{app.encoder.launchEncoder();r=app.encoder.encodeSequence(s,out,${q(epr)},app.encoder.ENCODE_ENTIRE,1);app.encoder.startBatch();}catch(e){r=null;}
+if(!r||r=='0'){via='direct';r=s.exportAsMediaDirect(out,${q(epr)},0);}
+return JSON.stringify({success:true,master:out,dir:dir,via:via,result:String(r)});`;
+  const m = await jsx(bridge, body, 60 * 60_000);
+  if (!m?.success) return { tool: 'export_deliverables', ...m };
+  const job = startExportJob(m.master, m.dir, ids, { client: String(args.client), title: String(args.title), version: args.version }, { width: args.width, height: args.height, watermark: args.watermark }, m.via === 'ame');
+  const view = await waitJob(job, (args.waitSeconds ?? 40) * 1000);
+  return { success: view.state !== 'failed', tool: 'export_deliverables', master: m.master, masterVia: m.via === 'ame' ? 'Adobe Media Encoder' : 'Premiere (direct)', ...view, ...(view.state === 'done' || view.state === 'failed' ? {} : { next: `export_status { jobId: "${job.id}" }` }) };
+}
+
+function exportStatus(args: Record<string, any>) {
+  const j = exportJob(String(args.jobId));
+  if (!j) return Promise.resolve({ success: false, error: `no export job ${args.jobId} in this session` });
+  return waitJob(j, (args.waitSeconds ?? 0) * 1000).then((v) => ({ success: true, tool: 'export_status', ...v }));
+}
+
