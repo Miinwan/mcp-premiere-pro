@@ -9,7 +9,7 @@ import type { MCPTool } from './index.js';
 import { encodeRgbaPng } from './expanded.js';
 import { exportJob, ffmpegPath, PRESETS as DELIVERABLES, startExportJob, waitJob } from './deliverables.js';
 import { beatLayout, detectBeats } from './beats.js';
-import { humanSize, moveToTrash, planCleanup, writeReport, withSizes, type CleanupReport, type ProjectMediaItem } from './cleanup.js';
+import { humanSize, insideFolder, jobFolderFor, moveToTrash, planCleanup, writeReport, withSizes, type CleanupReport, type ProjectMediaItem } from './cleanup.js';
 
 /**
  * Studio tools (Minwan): rough cut from slate cues and shot descriptions via
@@ -491,6 +491,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
       description: 'After delivery: find everything the job no longer uses, without changing anything. Usage is read from the timelines (nested sequences and multicam included): project items on no timeline (video, audio, stills, mattes, captions…), and on disk the unused imported files, their proxies, and media files sitting in the source folders that were never used. Delivery/render folders (Edited, Export, Xuất file, Render, Final, Bàn giao…) and the files in use with their proxies are always kept. keepSequences: only these sequences count as the job (the others are listed for removal too). Writes a report in ~/Library/Application Support/MCP Adobe/Don dep and returns a summary for anh to check. Then clean_unused_media.',
       inputSchema: z.object({
         keepSequences: z.array(z.string()).optional().describe('Sequence names that make the job (default: every sequence is kept and counts as used)'),
+        jobFolder: z.string().optional().describe('Job folder: only files inside it may go to the Trash (default: the project\'s folder, or its parent when the project sits in a Project/Premiere/AE subfolder). Files from elsewhere (Soundly, music libraries) are only removed from the project.'),
         scanFolders: z.boolean().optional().describe('Also list unused media files lying in the source folders (default true)'),
         trashProxiesOfUsed: z.boolean().optional().describe('Also list proxies of the files still in use (default false: keep them for client changes)')
       })
@@ -1862,18 +1863,20 @@ async function reviewUnused(bridge: PremiereProTransport, args: Record<string, a
   const r = await jsx(bridge, `${USAGE_JSX(keep)}return JSON.stringify({success:true,project:String(app.project.path),items:items});`, 180000);
   if (!r?.success) return { tool: 'review_unused_media', ...r };
   const items = r.items as ProjectMediaItem[];
-  const plan = planCleanup(items, { trashProxiesOfUsed: !!args.trashProxiesOfUsed, scanFolders: args.scanFolders !== false });
+  const jobFolder = String(args.jobFolder ?? jobFolderFor(r.project));
+  const plan = planCleanup(items, { jobFolder, trashProxiesOfUsed: !!args.trashProxiesOfUsed, scanFolders: args.scanFolders !== false });
   const trash = withSizes(plan.trash);
   const inUse = withSizes(plan.usedFiles.map((p) => ({ path: p })));
   const total = trash.reduce((a, b) => a + b.size, 0);
   const { file } = writeReport({
-    app: 'premiere', project: r.project, giu: keep ?? ['(mọi sequence)'],
+    app: 'premiere', project: r.project, thu_muc_job: jobFolder, giu: keep ?? ['(mọi sequence)'],
     dang_dung: inUse, xoa_khoi_project: plan.removeFromProject, dua_vao_trash: trash, tong_dung_luong: total,
     canh_bao: ['File trong thư mục nguồn có thể đang dùng ở project khác: xem danh sách trước khi dọn.']
   });
   return {
     success: true, tool: 'review_unused_media', report: file,
-    project: r.project, keep: keep ?? 'every sequence',
+    project: r.project, jobFolder, keep: keep ?? 'every sequence',
+    onlyRemovedFromProject: plan.removeFromProject.filter((i) => i.ly_do.includes('ngoài thư mục job')).length,
     inUse: inUse.length, removeFromProject: plan.removeFromProject.length, toTrash: trash.length, frees: humanSize(total),
     biggest: [...trash].sort((a, b) => b.size - a.size).slice(0, 20).map((t) => `${humanSize(t.size)}  ${t.path}  (${t.ly_do})`),
     projectItems: plan.removeFromProject.slice(0, 40).map((i) => `${i.name} — ${i.ly_do}`),
@@ -1912,8 +1915,10 @@ return JSON.stringify({success:gone,removed:moved,emptyBinsRemoved:emptied,error
   }
   let trash: any = null;
   if (args.trashFiles !== false) {
+    const job = rep.thu_muc_job ?? jobFolderFor(rep.project);
     const paths = rep.dua_vao_trash.map((t) => t.path).filter((p) => {
       if (keepFiles.has(p.normalize('NFC'))) { skipped.push(`${p}: đang dùng`); return false; }
+      if (!insideFolder(p, job)) { skipped.push(`${p}: ngoài thư mục job ${job}`); return false; }
       return true;
     });
     const t = await moveToTrash(paths);

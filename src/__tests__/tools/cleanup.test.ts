@@ -1,4 +1,4 @@
-import { planCleanup, sequencePattern, KEEP_DIR } from '../../tools/cleanup.js';
+import { jobFolderFor, planCleanup, sequencePattern, KEEP_DIR } from '../../tools/cleanup.js';
 
 describe('project clean-up plan', () => {
   const items = [
@@ -32,6 +32,17 @@ describe('project clean-up plan', () => {
   it('removes unused items from the project, including mattes', () => {
     expect(plan.removeFromProject.map((i) => i.id).sort()).toEqual(['2', '3', '4']);
   });
+  it('only trashes files inside the job folder; the rest is just removed from the project', () => {
+    const lib = [...items, { id: '7', name: 'whoosh.wav', path: '/Users/me/Soundly/whoosh.wav', proxy: null, used: false, isSequence: false }];
+    const p = planCleanup(lib, { jobFolder: '/job', listDir: (d) => (d === '/Users/me/Soundly' ? ['whoosh.wav', 'boom.wav'] : disk[d] ?? []) });
+    const t = p.trash.map((x) => x.path);
+    expect(t.some((x) => x.startsWith('/Users/me/Soundly'))).toBe(false);
+    expect(t).toContain('/job/Source/B.mp4');
+    expect(p.removeFromProject.find((i) => i.id === '7')!.ly_do).toMatch(/ngoài thư mục job/);
+    expect(jobFolderFor('/job/Project/Edit v3.prproj')).toBe('/job');
+    expect(jobFolderFor('/job/Edit v3.prproj')).toBe('/job');
+  });
+
   it('protects delivery folders', () => {
     expect(KEEP_DIR.test('/job/Edited/final.mp4')).toBe(true);
     expect(KEEP_DIR.test('/job/Xuất file/a.mp4')).toBe(true);

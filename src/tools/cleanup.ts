@@ -33,6 +33,23 @@ export interface CleanupReport {
   dua_vao_trash: { path: string; size: number; ly_do: string }[];
   tong_dung_luong: number;
   canh_bao: string[];
+  thu_muc_job?: string;
+}
+
+/**
+ * The job folder: the project's folder, or its parent when the project sits in a
+ * "Project"/"Premiere"/"AE" subfolder. Only files inside it may go to the Trash;
+ * anything else (Soundly SFX, music libraries, shared assets) is only removed
+ * from the project.
+ */
+export function jobFolderFor(projectPath: string): string {
+  const dir = dirname(projectPath);
+  return /^(project|projects|prproj|premiere|pr|ae|after effects|dự án|du an)$/i.test(basename(dir)) ? dirname(dir) : dir;
+}
+
+export function insideFolder(path: string, folder: string): boolean {
+  const f = norm(folder).replace(/\/+$/, '') + '/';
+  return norm(path).toLowerCase().startsWith(f.toLowerCase());
 }
 
 const norm = (p: string) => p.normalize('NFC');
@@ -53,7 +70,7 @@ export function sequencePattern(file: string): RegExp | null {
  * What to take out of the project and which files on disk can go to the Trash.
  * `listDir` is injectable for tests. Pure apart from it.
  */
-export function planCleanup(items: ProjectMediaItem[], opts: { trashProxiesOfUsed?: boolean; scanFolders?: boolean; listDir?: (dir: string) => string[] } = {}) {
+export function planCleanup(items: ProjectMediaItem[], opts: { jobFolder?: string; trashProxiesOfUsed?: boolean; scanFolders?: boolean; listDir?: (dir: string) => string[] } = {}) {
   const listDir = opts.listDir ?? ((d: string) => { try { return readdirSync(d); } catch { return []; } });
   const usedFiles = new Set<string>();
   const usedSeqPatterns: { dir: string; re: RegExp }[] = [];
@@ -69,11 +86,18 @@ export function planCleanup(items: ProjectMediaItem[], opts: { trashProxiesOfUse
 
   const removeFromProject = items
     .filter((i) => !i.used)
-    .map((i) => ({ id: i.id, name: i.name, path: i.path, ly_do: i.isSequence ? 'sequence không nằm trong danh sách giữ' : i.path ? 'không có trên timeline nào' : 'item không dùng (matte, adjustment layer, caption…)' }));
+    .map((i) => ({
+      id: i.id, name: i.name, path: i.path,
+      ly_do: i.isSequence ? 'sequence không nằm trong danh sách giữ'
+        : !i.path ? 'item không dùng (matte, adjustment layer, caption…)'
+        : opts.jobFolder && !insideFolder(i.path, opts.jobFolder) ? 'không dùng; file nằm ngoài thư mục job nên chỉ xoá khỏi project, giữ trên Mac'
+        : 'không có trên timeline nào'
+    }));
 
   const trash = new Map<string, string>();
   const add = (p: string, why: string) => {
     if (!p || isUsed(p) || KEEP_DIR.test(p) || !MEDIA_EXT.has(extname(p).toLowerCase())) return;
+    if (opts.jobFolder && !insideFolder(p, opts.jobFolder)) return;
     if (!trash.has(norm(p))) trash.set(norm(p), why);
   };
   for (const it of items.filter((i) => !i.used)) {
@@ -83,7 +107,7 @@ export function planCleanup(items: ProjectMediaItem[], opts: { trashProxiesOfUse
   if (opts.trashProxiesOfUsed) for (const it of items.filter((i) => i.used && i.proxy)) add(it.proxy!, 'proxy của file đang dùng (tạo lại được)');
   if (opts.scanFolders !== false) {
     const dirs = new Set<string>();
-    for (const it of items) if (it.path && !KEEP_DIR.test(it.path)) dirs.add(norm(dirname(it.path)));
+    for (const it of items) if (it.path && !KEEP_DIR.test(it.path) && (!opts.jobFolder || insideFolder(it.path, opts.jobFolder))) dirs.add(norm(dirname(it.path)));
     for (const d of [...dirs]) dirs.add(join(d, 'Proxies'));
     for (const d of dirs) for (const f of listDir(d)) {
       if (f.startsWith('.')) continue;

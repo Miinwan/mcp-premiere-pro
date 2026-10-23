@@ -5,7 +5,9 @@ Quy trình anh chốt 23/10/2026: không tạo bản copy (Project Manager hay l
 1. `review_unused_media { keepSequences? }`: chỉ đọc. Mức dùng tính theo timeline (cả nested sequence, multicam). Không truyền `keepSequences` thì mọi sequence được giữ; truyền tên các sequence bàn giao thì sequence khác cũng vào danh sách xoá. Kết quả là báo cáo JSON trong `~/Library/Application Support/MCP Adobe/Don dep/`, kèm tóm tắt: số item xoá khỏi project, số file vào Trash, dung lượng giải phóng, 20 file lớn nhất.
 2. Đưa danh sách cho anh xem. Anh đồng ý thì chạy `clean_unused_media { report, confirm: true }`: lưu checkpoint project, kiểm tra lại mức dùng (cái gì vừa được dùng thì bỏ qua), xoá item khỏi project (cả bin rỗng do dọn), lưu project, rồi Finder chuyển file vào Trash (Put Back được).
 
-Vào Trash:
+Chỉ file nằm trong thư mục job mới có thể vào Trash. Thư mục job là thư mục chứa project; nếu thư mục đó tên kiểu Project, Premiere, AE thì lấy thư mục cha (đổi bằng `jobFolder`). File từ chỗ khác trên Mac (SFX lấy từ Soundly, thư viện nhạc, asset dùng chung) không bị đụng tới, chỉ xoá khỏi project nếu không dùng.
+
+Vào Trash (trong thư mục job):
 - File đã import nhưng không có trên timeline nào, kèm proxy của nó (proxy đang gắn, hoặc trong thư mục `Proxies` cạnh nguồn).
 - File media nằm trong thư mục nguồn (và `Proxies`) mà chưa bao giờ dùng, kể cả âm thanh, ảnh, PSD, SRT.
 
