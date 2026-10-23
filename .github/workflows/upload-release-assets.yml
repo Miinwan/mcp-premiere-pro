@@ -38,5 +38,5 @@ jobs:
         run: |
           gh release upload "${{ github.event.release.tag_name }}" \
             "MCPBridgeCEP-${{ github.event.release.tag_name }}-unsigned.zip" \
-            "release-artifacts/adobe-premiere-pro-mcp-*.mcpb" \
+            "release-artifacts/mcp-premiere-pro-*.mcpb" \
             --clobber

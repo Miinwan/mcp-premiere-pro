@@ -10,25 +10,25 @@ const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'
 const outputDirectory = join(root, 'release-artifacts');
 const stagingDirectory = join(root, '.mcpb-staging');
 const serverDirectory = join(stagingDirectory, 'server');
-const outputPath = join(outputDirectory, `adobe-premiere-pro-mcp-${packageJson.version}.mcpb`);
+const outputPath = join(outputDirectory, `mcp-premiere-pro-${packageJson.version}.mcpb`);
 
 const manifest = {
   manifest_version: '0.3',
-  name: 'adobe-premiere-pro-mcp',
-  display_name: 'Adobe Premiere Pro MCP',
+  name: 'mcp-premiere-pro',
+  display_name: 'MCP Premiere Pro',
   version: packageJson.version,
   description: 'Control Adobe Premiere Pro through MCP using the included CEP bridge.',
   long_description: 'A local MCP server for Adobe Premiere Pro. On first launch the bundle installs its CEP bridge for the current user. Restart Premiere Pro, open Window > Extensions > MCP Bridge (CEP), and start the bridge before requesting edits.',
   author: {
-    name: 'hetpatel-11',
-    url: 'https://github.com/hetpatel-11/Adobe_Premiere_Pro_MCP'
+    name: 'Miinwan',
+    url: 'https://github.com/Miinwan'
   },
   repository: {
     type: 'git',
-    url: 'https://github.com/hetpatel-11/Adobe_Premiere_Pro_MCP.git'
+    url: 'https://github.com/Miinwan/mcp-premiere-pro.git'
   },
-  documentation: 'https://github.com/hetpatel-11/Adobe_Premiere_Pro_MCP#install',
-  support: 'https://github.com/hetpatel-11/Adobe_Premiere_Pro_MCP/issues',
+  documentation: 'https://github.com/Miinwan/mcp-premiere-pro#install',
+  support: 'https://github.com/Miinwan/mcp-premiere-pro/issues',
   server: {
     type: 'node',
     entry_point: 'server/launcher.js',

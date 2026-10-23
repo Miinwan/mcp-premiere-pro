@@ -18,7 +18,7 @@ const password = randomBytes(32).toString('base64url');
 
 await mkdir(dirname(certificatePath), { recursive: true });
 execFileSync(zxpSignCommand, [
-  '-selfSignedCert', 'US', 'CA', 'Het Patel', 'Adobe Premiere Pro MCP', password, certificatePath,
+  '-selfSignedCert', 'US', 'CA', 'Miinwan', 'Adobe Premiere Pro MCP', password, certificatePath,
   '-validityDays', '3650'
 ], { stdio: 'inherit' });
 await chmod(certificatePath, 0o600);

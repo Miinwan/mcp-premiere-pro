@@ -1,7 +1,7 @@
 {
-  "name": "adobe-premiere-pro-mcp",
+  "name": "mcp-premiere-pro",
   "interface": {
-    "displayName": "MCP Bridge for Adobe Premiere Pro"
+    "displayName": "MCP Premiere Pro"
   },
   "plugins": [
     {

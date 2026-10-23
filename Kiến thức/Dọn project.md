@@ -1,19 +1,19 @@
-# Dọn project sau bàn giao — Use when anh wants to slim a finished job: remove unused media from the Premiere project and move unused files (with their proxies) to the Trash.
+# Project clean-up after delivery — use when a finished job should be slimmed down: remove unused media from the Premiere project and move unused files (with their proxies) to the Trash.
 
-Quy trình anh chốt 23/10/2026: không tạo bản copy (Project Manager hay lỗi). Review cái gì không dùng, xoá khỏi project, đưa file thừa vào Trash; anh tự xem Trash rồi xoá. Chỉ giữ file đang dùng để khách cần sửa; file gốc anh đã lưu trên Drive.
+Workflow settled on 2026-10-23: no consolidated copy (Project Manager is unreliable). Review what is unused, remove it from the project, move the leftover files to the Trash; the owner checks the Trash and empties it. Only files in use are kept, in case the client asks for changes; the original camera files are archived elsewhere.
 
-1. `review_unused_media { keepSequences? }`: chỉ đọc. Mức dùng tính theo timeline (cả nested sequence, multicam). Không truyền `keepSequences` thì mọi sequence được giữ; truyền tên các sequence bàn giao thì sequence khác cũng vào danh sách xoá. Kết quả là báo cáo JSON trong `~/Library/Application Support/MCP Adobe/Don dep/`, kèm tóm tắt: số item xoá khỏi project, số file vào Trash, dung lượng giải phóng, 20 file lớn nhất.
-2. Đưa danh sách cho anh xem. Anh đồng ý thì chạy `clean_unused_media { report, confirm: true }`: lưu checkpoint project, kiểm tra lại mức dùng (cái gì vừa được dùng thì bỏ qua), xoá item khỏi project (cả bin rỗng do dọn), lưu project, rồi Finder chuyển file vào Trash (Put Back được).
+1. `review_unused_media { keepSequences? }`: read-only. Usage is computed from the timelines (nested sequences and multicam included). Without `keepSequences` every sequence is kept; with the names of the delivered sequences, the other sequences go on the removal list too. The result is a JSON report in `~/Library/Application Support/MCP Adobe/Don dep/` plus a summary: items to remove from the project, files to the Trash, space freed, the 20 largest files.
+2. Show the list to the user. Only after they agree, run `clean_unused_media { report, confirm: true }`: saves a project checkpoint, re-checks usage (anything used since is skipped), removes the items from the project (and bins emptied by it), saves the project, then Finder moves the files to the Trash (Put Back works).
 
-Chỉ file nằm trong thư mục job mới có thể vào Trash. Thư mục job là thư mục chứa project; nếu thư mục đó tên kiểu Project, Premiere, AE thì lấy thư mục cha (đổi bằng `jobFolder`). File từ chỗ khác trên Mac (SFX lấy từ Soundly, thư viện nhạc, asset dùng chung) không bị đụng tới, chỉ xoá khỏi project nếu không dùng.
+Only files inside the job folder can go to the Trash. The job folder is the folder holding the project; if that folder is named like Project, Premiere or AE, its parent is used (change it with `jobFolder`). Files from elsewhere on the Mac (SFX from Soundly, music libraries, shared assets) are never touched; they are only removed from the project when unused.
 
-Vào Trash (trong thư mục job):
-- File đã import nhưng không có trên timeline nào, kèm proxy của nó (proxy đang gắn, hoặc trong thư mục `Proxies` cạnh nguồn).
-- File media nằm trong thư mục nguồn (và `Proxies`) mà chưa bao giờ dùng, kể cả âm thanh, ảnh, PSD, SRT.
+Goes to the Trash (inside the job folder):
+- Imported files that are on no timeline, with their proxies (the attached proxy, or the one in the `Proxies` folder next to the source).
+- Media files in the source folders (and `Proxies`) that were never used, including audio, stills, PSD and SRT.
 
-Luôn giữ:
-- File đang dùng và proxy của nó (trừ khi `trashProxiesOfUsed: true`).
-- Thư mục bàn giao/render: Edited, Export, Xuất file, Render, Output, Final, Bàn giao.
-- File không phải media, project .prproj/.aep, phần còn lại của image sequence đang dùng.
+Always kept:
+- Files in use and their proxies (unless `trashProxiesOfUsed: true`).
+- Delivery/render folders: Edited, Export, Xuất file, Render, Output, Final, Bàn giao.
+- Non-media files, `.prproj`/`.aep` projects, and the rest of an image sequence in use.
 
-Lưu ý: file trong thư mục nguồn có thể đang dùng ở project khác; xem danh sách trước khi dọn. Lần đầu macOS hỏi quyền cho phép điều khiển Finder; nếu bị chặn, mở System Settings → Privacy & Security → Automation. After Effects có op tương ứng (`project.review_unused`, `project.clean_unused`), cùng định dạng báo cáo.
+Notes: files in the source folders may be used by another project; read the list before cleaning. The first time, macOS asks for permission to control Finder; if it is blocked, open System Settings → Privacy & Security → Automation. After Effects has matching ops (`project.review_unused`, `project.clean_unused`) with the same report format.

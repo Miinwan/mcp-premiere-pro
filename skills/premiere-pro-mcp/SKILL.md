@@ -5,7 +5,7 @@ description: Install, verify, troubleshoot, and operate the Adobe Premiere Pro M
 
 # Adobe Premiere Pro MCP
 
-Use this skill when working with the Adobe Premiere Pro MCP server from `hetpatel-11/Adobe_Premiere_Pro_MCP`.
+Use this skill when working with the Adobe Premiere Pro MCP server from `Miinwan/mcp-premiere-pro`.
 
 ## Core Rules
 
@@ -25,8 +25,8 @@ If the user asks you to install or set up the MCP:
 2. Clone or open the repo:
 
 ```bash
-git clone https://github.com/hetpatel-11/Adobe_Premiere_Pro_MCP.git
-cd Adobe_Premiere_Pro_MCP
+git clone https://github.com/Miinwan/mcp-premiere-pro.git
+cd mcp-premiere-pro
 ```
 
 3. On macOS, run:
@@ -45,14 +45,14 @@ npm run build
 5. Register the MCP server in the user's client with:
 
 ```text
-command: node /absolute/path/to/Adobe_Premiere_Pro_MCP/dist/index.js
+command: node /absolute/path/to/mcp-premiere-pro/dist/index.js
 env: PREMIERE_TEMP_DIR=/tmp/premiere-mcp-bridge
 ```
 
 For Codex, prefer:
 
 ```bash
-codex mcp add premiere_pro --env PREMIERE_TEMP_DIR=/tmp/premiere-mcp-bridge -- node /absolute/path/to/Adobe_Premiere_Pro_MCP/dist/index.js
+codex mcp add premiere_pro --env PREMIERE_TEMP_DIR=/tmp/premiere-mcp-bridge -- node /absolute/path/to/mcp-premiere-pro/dist/index.js
 ```
 
 ## Premiere Bridge Startup

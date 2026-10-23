@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="MCP Premiere Pro: edit Adobe Premiere Pro by talking to Claude">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0c0a1f"/>
+      <stop offset="0.55" stop-color="#16123a"/>
+      <stop offset="1" stop-color="#0a1a2a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.78" cy="0.35" r="0.55">
+      <stop offset="0" stop-color="#9b8cff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#9b8cff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="clipA" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8f7dff"/>
+      <stop offset="1" stop-color="#b9adff"/>
+    </linearGradient>
+    <linearGradient id="clipB" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#3fc9b6"/>
+      <stop offset="1" stop-color="#7fe6d6"/>
+    </linearGradient>
+    <linearGradient id="clipC" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f0a35e"/>
+      <stop offset="1" stop-color="#ffc48c"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="400" fill="url(#bg)"/>
+  <rect width="1280" height="400" fill="url(#glow)"/>
+
+  <!-- title -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="72" y="150" fill="#ffffff" font-size="62" font-weight="700" letter-spacing="-1">MCP Premiere Pro</text>
+    <text x="74" y="200" fill="#c9c3ff" font-size="24" font-weight="500">Edit Adobe Premiere Pro by talking to Claude.</text>
+    <text x="74" y="236" fill="#8f8ab8" font-size="17">Proxies · rough cuts from slate calls · shot search · beat cuts · colour · captions · delivery</text>
+  </g>
+
+  <!-- timeline panel -->
+  <g transform="translate(72 276)">
+    <rect width="1136" height="96" rx="12" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.08"/>
+    <!-- ruler ticks -->
+    <g stroke="#ffffff" stroke-opacity="0.18">
+      <path d="M56 10v6M156 10v6M256 10v6M356 10v6M456 10v6M556 10v6M656 10v6M756 10v6M856 10v6M956 10v6M1056 10v6"/>
+    </g>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#8f8ab8">
+      <text x="16" y="42">V1</text>
+      <text x="16" y="78">A1</text>
+    </g>
+    <!-- video clips -->
+    <rect x="56" y="26" width="170" height="24" rx="5" fill="url(#clipA)"/>
+    <rect x="230" y="26" width="120" height="24" rx="5" fill="url(#clipB)"/>
+    <rect x="354" y="26" width="210" height="24" rx="5" fill="url(#clipA)"/>
+    <rect x="568" y="26" width="96" height="24" rx="5" fill="url(#clipC)"/>
+    <rect x="668" y="26" width="184" height="24" rx="5" fill="url(#clipB)"/>
+    <rect x="856" y="26" width="140" height="24" rx="5" fill="url(#clipA)"/>
+    <rect x="1000" y="26" width="120" height="24" rx="5" fill="url(#clipC)"/>
+    <!-- audio waveform -->
+    <g fill="#3fc9b6" fill-opacity="0.75">
+      <rect x="56" y="70" width="4" height="10" rx="2"/><rect x="64" y="66" width="4" height="18" rx="2"/><rect x="72" y="62" width="4" height="26" rx="2"/><rect x="80" y="68" width="4" height="14" rx="2"/>
+      <rect x="88" y="64" width="4" height="22" rx="2"/><rect x="96" y="60" width="4" height="30" rx="2"/><rect x="104" y="66" width="4" height="18" rx="2"/><rect x="112" y="70" width="4" height="10" rx="2"/>
+      <rect x="120" y="63" width="4" height="24" rx="2"/><rect x="128" y="59" width="4" height="32" rx="2"/><rect x="136" y="65" width="4" height="20" rx="2"/><rect x="144" y="69" width="4" height="12" rx="2"/>
+      <rect x="152" y="64" width="4" height="22" rx="2"/><rect x="160" y="61" width="4" height="28" rx="2"/><rect x="168" y="67" width="4" height="16" rx="2"/><rect x="176" y="71" width="4" height="8" rx="2"/>
+    </g>
+    <path d="M196 75 Q 300 58 404 75 T 612 75 T 820 75 T 1028 75 L 1120 75" fill="none" stroke="#9b8cff" stroke-opacity="0.55" stroke-width="2"/>
+    <!-- beat markers -->
+    <g fill="#5fe3ff">
+      <path d="M226 18l4 6h-8z"/><path d="M350 18l4 6h-8z"/><path d="M564 18l4 6h-8z"/><path d="M664 18l4 6h-8z"/><path d="M852 18l4 6h-8z"/><path d="M996 18l4 6h-8z"/>
+    </g>
+    <!-- playhead -->
+    <rect x="640" y="8" width="2" height="84" fill="#ff6b8b"/>
+    <path d="M634 4h14l-7 8z" fill="#ff6b8b"/>
+  </g>
+
+  <!-- chat bubble -->
+  <g transform="translate(860 70)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <rect width="348" height="74" rx="16" fill="#ffffff" fill-opacity="0.07" stroke="#9b8cff" stroke-opacity="0.45"/>
+    <path d="M40 74l-8 16 22-16z" fill="#9b8cff" fill-opacity="0.45"/>
+    <text x="22" y="32" fill="#e9e6ff" font-size="16">“Rough-cut this folder by the</text>
+    <text x="22" y="54" fill="#e9e6ff" font-size="16">slate calls, then cut it to the beat.”</text>
+  </g>
+</svg>

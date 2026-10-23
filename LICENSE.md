@@ -1,5 +1,6 @@
 MIT License
 
+Copyright (c) 2026 Miinwan
 Copyright (c) 2025-2026 hetpatel-11
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

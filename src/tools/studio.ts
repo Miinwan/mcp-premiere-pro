@@ -12,7 +12,7 @@ import { beatLayout, detectBeats } from './beats.js';
 import { humanSize, insideFolder, jobFolderFor, moveToTrash, planCleanup, writeReport, withSizes, type CleanupReport, type ProjectMediaItem } from './cleanup.js';
 
 /**
- * Studio tools (Minwan): rough cut from slate cues and shot descriptions via
+ * Studio tools: rough cut from slate cues and shot descriptions via
  * the MCP Adobe media engine (`media` CLI in MCP Adobe/Media, JSON contract v1
  * in Media/README.md), and a round trip to After Effects
  * through a handoff JSON that the After Effects MCP reads and writes
@@ -124,8 +124,8 @@ function mediaProblem(job: MediaJob, tool: string): any | null {
   const out = parseMedia(job);
   if (job.code === 0 && out) return null;
   if (out?.loi === 'thieu_proxy') return { success: false, tool, missingProxy: out.file, hint: 'Make proxies for these clips first (Premiere Create Proxies, or create_proxies), then call again; or pass allowOriginal: true to read the originals.' };
-  if (job.code === 3) return { success: false, tool, needsConfirmation: true, question: out?.cau_hoi ?? out, hint: 'Ask anh Quang first: the media engine needs his OK (usually a download).' };
-  if (job.code === 4) return { success: false, tool, missingModel: true, detail: out, hint: 'The deep mode model is not installed: run `uv run media cai-mo-ta --model 2b --json` in MCP Adobe/Media after anh agrees, or use mode fast.' };
+  if (job.code === 3) return { success: false, tool, needsConfirmation: true, question: out?.cau_hoi ?? out, hint: 'Ask the user first: the media engine needs their OK (usually a download).' };
+  if (job.code === 4) return { success: false, tool, missingModel: true, detail: out, hint: 'The deep mode model is not installed: run `uv run media cai-mo-ta --model 2b --json` in MCP Adobe/Media after the user agrees, or use mode fast.' };
   return { success: false, tool, exitCode: job.code, error: out?.thong_bao ?? out?.loi ?? 'media engine failed', stderr: job.stderrTail.slice(-6) };
 }
 
@@ -209,11 +209,11 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     {
       name: 'rough_cut_by_cues',
       description:
-        'Rough-cut a folder of raw footage by the slate cues anh calls on set ("3, 2, 1", "action", "diễn", "đi" to start; "cắt", "cut", "ok", "được rồi" to end), heard by Whisper in each file\'s own audio through the MCP Adobe media engine. ' +
-        'One source can give many takes. Builds a NEW sequence with every take back to back, a→z by file then time, so anh reorders them himself; each take gets a sequence marker (take id, cue heard, dialogue, confidence) and low-confidence takes a red marker. Files with no cue are kept whole (unless dropNoCue). ' +
+        'Rough-cut a folder of raw footage by the slate cues called on set ("3, 2, 1", "action", "diễn", "đi" to start; "cắt", "cut", "ok", "được rồi" to end), heard by Whisper in each file\'s own audio through the MCP Adobe media engine. ' +
+        'One source can give many takes. Builds a NEW sequence with every take back to back, a→z by file then time, so the editor can reorder them; each take gets a sequence marker (take id, cue heard, dialogue, confidence) and low-confidence takes a red marker. Files with no cue are kept whole (unless dropNoCue). ' +
         'Analysis is cached next to the footage (.media/); a long first run returns status "running" — call again with the same arguments to pick up the result.',
       inputSchema: z.object({
-        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after anh filtered the junk (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
+        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after the junk was filtered out (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
         bin: z.string().optional().describe('Only the clips in this project bin'),
         allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
         sequenceName: z.string().optional().describe('New sequence name (default "Rough cut <folder>")'),
@@ -222,7 +222,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         lowConfidence: z.number().min(0).max(1).optional().describe('Takes below this confidence get a red marker (default 0.6)'),
         dropNoCue: z.boolean().optional().describe('Leave out files with no cue (B-roll) instead of keeping them whole (default false)'),
         model: z.string().optional().describe('Whisper model (default large-v3)'),
-        fast: z.boolean().optional().describe('Run the media engine in fast mode instead of the quiet background mode (default true: anh is waiting)'),
+        fast: z.boolean().optional().describe('Run the media engine in fast mode instead of the quiet background mode (default true: the user is waiting)'),
         waitSeconds: z.number().min(1).max(600).optional().describe('How long to wait for the media engine in this call before returning "running" (default 45)'),
         analyzeOnly: z.boolean().optional().describe('Only run the analysis and return the takes, do not touch Premiere')
       })
@@ -230,10 +230,10 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     {
       name: 'describe_sources',
       description:
-        'Describe every shot (file) in a footage folder through the media engine: Vietnamese one-line description, shot size, setting, content labels, sharpness, exposure, shake, faces, a beauty score. mode "fast" needs no download; "deep" adds a local vision model (Qwen3.5 2B MLX) for natural sentences. ' +
-        'With writeToProject, the description goes into each imported clip\'s Comment column and the quality numbers into Log Note, so anh can search and sort in the Project panel.',
+        'Describe every shot (file) in a footage folder through the media engine: one-line description (in Vietnamese), shot size, setting, content labels, sharpness, exposure, shake, faces, a beauty score. mode "fast" needs no download; "deep" adds a local vision model (Qwen3.5 2B MLX) for natural sentences. ' +
+        'With writeToProject, the description goes into each imported clip\'s Comment column and the quality numbers into Log Note, so they can be searched and sorted in the Project panel.',
       inputSchema: z.object({
-        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after anh filtered the junk (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
+        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after the junk was filtered out (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
         bin: z.string().optional().describe('Only the clips in this project bin'),
         allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
         mode: z.enum(['fast', 'deep']).optional().describe('fast (default) or deep'),
@@ -244,11 +244,11 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     {
       name: 'find_shots',
       description:
-        'Find shots by what is in the picture, in Vietnamese or English ("cô gái cầm menu", "cận mặt", "toàn cảnh nhà hàng", "người phục vụ áo đỏ"), through the media engine (SigLIP 2, local): every second of each clip\'s proxy is compared with the words, the best stretches come back ranked with in/out and a score. ' +
+        'Find shots by what is in the picture, in English or Vietnamese ("close-up of a face", "wide shot of the restaurant", "waiter in a red shirt", or "cô gái cầm menu"), through the media engine (SigLIP 2, local): every second of each clip\'s proxy is compared with the words, the best stretches come back ranked with in/out and a score. ' +
         'Each hit becomes a marker on the source clip in the Project panel (open the clip in the Source Monitor to see it; searching the same words again replaces those markers). With placeOnTimeline, also builds a sequence "Tìm: <query>" with the hits in rank order. ' +
-        'Uses the clips anh kept in the project with their proxies, like describe_sources. The first search on a folder reads the images (about 30 s for 5 minutes of footage); later searches take a few seconds.',
+        'Uses the clips kept in the project with their proxies, like describe_sources. The first search on a folder reads the images (about 30 s for 5 minutes of footage); later searches take a few seconds.',
       inputSchema: z.object({
-        query: z.string().min(1).describe('What to look for, e.g. "cô gái cầm menu", "cận mặt", "wide shot of the restaurant"'),
+        query: z.string().min(1).describe('What to look for, e.g. "girl holding a menu", "close-up", "wide shot of the restaurant" (Vietnamese works too)'),
         sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project (with their proxies); with a folder, only the project clips inside it, or the whole folder when none are imported'),
         bin: z.string().optional().describe('Only the clips in this project bin'),
         allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
@@ -268,7 +268,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         videoTrack: z.number().int().min(0).optional().describe('0-based video track (default 0 = V1)'),
         clipIndex: z.number().int().min(0).optional().describe('0-based clip index on that track; omit to use the clip under the playhead'),
         handles: z.number().min(0).max(10).optional().describe('Extra source seconds before and after the cut, for trimming later (default 1)'),
-        note: z.string().optional().describe('What to do in AE, e.g. "chữ tiêu đề bay vào + glow"')
+        note: z.string().optional().describe('What to do in AE, e.g. "title flies in + glow"')
       })
     },
     {
@@ -284,7 +284,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     {
       name: 'create_aspect_versions',
       description:
-        'Make square and vertical versions of a finished horizontal edit, the way anh does it by hand: duplicates the sequence as "<name> 1x1" / "<name> 9x16" (cuts, order, tracks, audio, titles unchanged), changes the frame, and re-frames every video clip from the horizontal version anh already adjusted (media `bo-cuc`: a window cut out of the horizontal frame, centred on faces when there are any, never showing black edges or anything anh cropped away). Only Motion Scale and Position change; Anchor Point, Rotation and Crop stay. Adjustment layers keep all their effects and are scaled to cover the new frame. Titles/graphics are left as they are and listed for a manual check.',
+        'Make square and vertical versions of a finished horizontal edit, the way an editor does it by hand: duplicates the sequence as "<name> 1x1" / "<name> 9x16" (cuts, order, tracks, audio, titles unchanged), changes the frame, and re-frames every video clip from the horizontal version as already adjusted (media `bo-cuc`: a window cut out of the horizontal frame, centred on faces when there are any, never showing black edges or anything cropped away). Only Motion Scale and Position change; Anchor Point, Rotation and Crop stay. Adjustment layers keep all their effects and are scaled to cover the new frame. Titles/graphics are left as they are and listed for a manual check.',
       inputSchema: z.object({
         ...seqRef,
         aspects: z.array(z.string()).optional().describe('Frames to make (default ["1:1", "9:16"]; also "4:5" or "<w>x<h>")'),
@@ -294,7 +294,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     {
       name: 'add_color_layer',
       description:
-        'One colour layer over the whole sequence or a time range (a global look). For grading, anh works per scene: use add_scene_color_layers. Lays a colour-grading adjustment layer over the whole sequence (or a time range) on its own top track, with Lumetri Color ready to grade — the "layer edit màu" anh puts above the cut. Uses the project\'s Adjustment Layer item, importing one from Mako\'s template when the project has none (Premiere has no scripting call that creates one). Optional Lumetri Basic values (temperature, tint, exposure, contrast, highlights, shadows, whites, blacks, saturation, vibrance) and a Lumetri preset/LUT look.',
+        'One colour layer over the whole sequence or a time range (a global look). For per-scene grading use add_scene_color_layers. Lays a colour-grading adjustment layer over the whole sequence (or a time range) on its own top track, with Lumetri Color ready to grade — the colour layer an editor puts above the cut. Uses the project\'s Adjustment Layer item, importing one from Mako\'s template when the project has none (Premiere has no scripting call that creates one). Optional Lumetri Basic values (temperature, tint, exposure, contrast, highlights, shadows, whites, blacks, saturation, vibrance) and a Lumetri preset/LUT look.',
       inputSchema: z.object({
         ...seqRef,
         start: z.number().optional().describe('Start in seconds (default 0)'),
@@ -321,7 +321,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     {
       name: 'add_color_matte',
       description:
-        'Put a solid colour background on the timeline without Premiere\'s colour picker (which blocks scripting): white or black by default — the plate a logo sits on — or any #RRGGBB. Made at the sequence frame size, saved next to the project in "MCP mattes" (reused, never in a temp folder that could go offline), imported into a "Nền màu" bin and placed on the given track for the given span (default: the whole sequence on a new bottom-most free track below the clips? no — on `track`, default V1 when it is free there, else a new track at the top so you can drag it under).',
+        'Put a solid colour background on the timeline without Premiere\'s colour picker (which blocks scripting): white or black by default — the plate a logo sits on — or any #RRGGBB. Made at the sequence frame size, saved next to the project in "MCP mattes" (reused, never in a temp folder that could go offline), imported into a "Nền màu" bin and placed on the given track for the given span (default: the whole sequence on `track`, which is V1 when that span is free there, else a new track at the top so you can drag it under).',
       inputSchema: z.object({
         ...seqRef,
         color: z.string().optional().describe('"white" / "trắng" (default), "black" / "đen", or "#RRGGBB"'),
@@ -340,7 +340,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     ,{
       name: 'export_deliverables',
       description:
-        'Export a sequence for delivery: one ProRes 422 HQ master straight from Premiere (exportAsMediaDirect with the built-in "Match Source - Apple ProRes 422 HQ" preset), then every requested deliverable from it — youtube_4k, youtube_1080, reels (1080x1920), feed_4x5, square, led (screen width/height), review (720p, watermark + timecode), master, png_alpha — with sizes, bitrates and -14 LUFS loudness from pr_guide "Xuất file". Files are named "<Khách> <Tên video> <Tỉ lệ> V<n>" (next free version) and logged with the measured LUFS in "Kết quả xuất.md". Export the 9x16 / 1x1 sequences for vertical and square (create_aspect_versions) — another aspect is letterboxed.',
+        'Export a sequence for delivery: one ProRes 422 HQ master straight from Premiere (exportAsMediaDirect with the built-in "Match Source - Apple ProRes 422 HQ" preset), then every requested deliverable from it — youtube_4k, youtube_1080, reels (1080x1920), feed_4x5, square, led (screen width/height), review (720p, watermark + timecode), master, png_alpha — with sizes, bitrates and -14 LUFS loudness from pr_guide "Xuất file". Files are named "<Client> <Video name> <Aspect> V<n>" (next free version) and logged with the measured LUFS in "Kết quả xuất.md" (export log). Export the 9x16 / 1x1 sequences for vertical and square (create_aspect_versions) — another aspect is letterboxed.',
       inputSchema: z.object({
         ...seqRef,
         presets: z.array(z.string()).describe('Deliverables to make'),
@@ -362,12 +362,12 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     ,{
       name: 'add_scene_color_layers',
       description:
-        'Grade per scene the way anh does: one adjustment layer with Lumetri Color per SOURCE on a new top track, named "Màu <source>". Neighbouring clips from the same source share one layer; the same source used again elsewhere on the timeline gets a layer with the same name and the same Lumetri values (keep them identical with sync_color_layers after grading one); a different source always gets its own layer. Titles/adjustment layers/graphics are skipped. Optional Lumetri Basic values for all (basic) or per source file name (perSource).',
+        'Grade per scene: one adjustment layer with Lumetri Color per SOURCE on a new top track, named "Màu <source>". Neighbouring clips from the same source share one layer; the same source used again elsewhere on the timeline gets a layer with the same name and the same Lumetri values (keep them identical with sync_color_layers after grading one); a different source always gets its own layer. Titles/adjustment layers/graphics are skipped. Optional Lumetri Basic values for all (basic) or per source file name (perSource).',
       inputSchema: z.object({
         ...seqRef,
         sourceTrack: z.number().int().min(0).optional().describe('Video track holding the footage (default 0 = V1)'),
         basic: z.record(z.string(), z.number()).optional().describe('Lumetri Basic values for every scene'),
-        perSource: z.record(z.string(), z.record(z.string(), z.number())).optional().describe('{ "FS_C0661": { exposure: 0.3 } } — by file name without extension')
+        perSource: z.record(z.string(), z.record(z.string(), z.number())).optional().describe('{ "A001_C0661": { exposure: 0.3 } } — by file name without extension')
       })
     },
     {
@@ -376,7 +376,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         'Make every colour layer of the same scene identical again after grading one of them: for each "Màu <source>" name, copies ALL Lumetri Color parameters (basic, creative, curves, wheels, HSL, vignette) from the master instance to the other instances of that name. master: a clip name + index or the instance under the playhead; default the first instance of each name. Different sources are never touched by each other.',
       inputSchema: z.object({
         ...seqRef,
-        name: z.string().optional().describe('Only this layer name, e.g. "Màu FS_C0661" (default every "Màu …" group)'),
+        name: z.string().optional().describe('Only this layer name, e.g. "Màu A001_C0661" (default every "Màu …" group)'),
         fromPlayhead: z.boolean().optional().describe('Use the instance under the playhead as the master for its group (default false: the first instance)')
       })
     }
@@ -400,7 +400,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     ,{
       name: 'checkpoint_project',
       description: 'Save the project, then copy the .prproj into "<project> checkpoints/<project> <date time> <label>.prproj" next to it. Premiere has no undo group for scripts, so take one before any large automated change (rough cut, aspect versions, colour layers); restore by opening the copy. Lists existing checkpoints with list: true.',
-      inputSchema: z.object({ label: z.string().optional().describe('Short label, e.g. "truoc lam ban doc"'), list: z.boolean().optional().describe('Only list checkpoints') })
+      inputSchema: z.object({ label: z.string().optional().describe('Short label, e.g. "before vertical version"'), list: z.boolean().optional().describe('Only list checkpoints') })
     },
     {
       name: 'organize_project_bins',
@@ -424,7 +424,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     }
     ,{
       name: 'detect_beats',
-      description: 'Find the beat of the music: tempo (BPM), every beat and the first beat of each bar. Give a file, or let it read the music already on the timeline (audio-only clips that are not named like a voiceover) and drop cyan markers "Nhịp 1" on each bar (markers: "beats" for every beat, "none" for no markers). Results are cached in <music folder>/.media. Check by ear: tempo can come out at half or double on sparse music.',
+      description: 'Find the beat of the music: tempo (BPM), every beat and the first beat of each bar. Give a file, or let it read the music already on the timeline (audio-only clips that are not named like a voiceover) and drop cyan markers "Nhịp 1" (bar 1) on each bar (markers: "beats" for every beat, "none" for no markers). Results are cached in <music folder>/.media. Check by ear: tempo can come out at half or double on sparse music.',
       inputSchema: z.object({
         ...seqRef,
         file: z.string().optional().describe('Music file to analyse instead of the timeline'),
@@ -435,7 +435,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     },
     {
       name: 'cut_to_beats',
-      description: 'Re-time a cut to the music: a copy of the sequence ("<name> (theo nhịp)") where every clip on the video track keeps its in point and its end moves to the nearest beat (every: 1 = each beat, 2 = every other, 4 = each bar), so all cuts land on the beat. Motion (scale/position/rotation) is carried over; music and other tracks stay. The original sequence is not changed. dryRun shows the plan first.',
+      description: 'Re-time a cut to the music: a copy of the sequence ("<name> (theo nhịp)", i.e. "on the beat") where every clip on the video track keeps its in point and its end moves to the nearest beat (every: 1 = each beat, 2 = every other, 4 = each bar), so all cuts land on the beat. Motion (scale/position/rotation) is carried over; music and other tracks stay. The original sequence is not changed. dryRun shows the plan first.',
       inputSchema: z.object({
         ...seqRef,
         musicTrack: z.number().int().min(0).optional().describe('Audio track with the music (default: any audio-only clip)'),
@@ -450,7 +450,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
       name: 'select_best_takes',
       description: 'Rank the takes of a footage folder from what the media engine heard: ended on a cut call, cue confidence, how clearly the lines were spoken, retake calls ("otra vez", "again", "lại đi"…) in or right after the take, very short takes, later takes slightly preferred. Returns the ranking with reasons per file (groupBy "file") or overall ("none"); with sequenceName it also builds a selects sequence of the best take(s) with the score on each marker. Uses the same cache as rough_cut_by_cues. Always check the picks by eye.',
       inputSchema: z.object({
-        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after anh filtered the junk (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
+        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after the junk was filtered out (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
         bin: z.string().optional().describe('Only the clips in this project bin'),
         allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
         groupBy: z.enum(['file', 'none']).optional().describe('Rank inside each file (default) or across the folder'),
@@ -464,7 +464,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     },
     {
       name: 'place_voiceover',
-      description: 'Put a voiceover file on the timeline (at the playhead or at seconds) on the first free audio track and duck the music under it: Volume keyframes only where the voice actually speaks (silences longer than 0.35 s let the music back up), with short fades. Music = audio-only clips on other tracks, or the tracks in duckTracks. Keyframes stay editable in Effect Controls. To record a Vietnamese/English voice first, use the long-tieng-voice-studio skill.',
+      description: 'Put a voiceover file on the timeline (at the playhead or at seconds) on the first free audio track and duck the music under it: Volume keyframes only where the voice actually speaks (silences longer than 0.35 s let the music back up), with short fades. Music = audio-only clips on other tracks, or the tracks in duckTracks. Keyframes stay editable in Effect Controls. To record a voice first, use a text-to-speech tool or skill.',
       inputSchema: z.object({
         ...seqRef,
         file: z.string().describe('Voiceover audio file'),
@@ -506,7 +506,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     }
     ,{
       name: 'review_unused_media',
-      description: 'After delivery: find everything the job no longer uses, without changing anything. Usage is read from the timelines (nested sequences and multicam included): project items on no timeline (video, audio, stills, mattes, captions…), and on disk the unused imported files, their proxies, and media files sitting in the source folders that were never used. Delivery/render folders (Edited, Export, Xuất file, Render, Final, Bàn giao…) and the files in use with their proxies are always kept. keepSequences: only these sequences count as the job (the others are listed for removal too). Writes a report in ~/Library/Application Support/MCP Adobe/Don dep and returns a summary for anh to check. Then clean_unused_media.',
+      description: 'After delivery: find everything the job no longer uses, without changing anything. Usage is read from the timelines (nested sequences and multicam included): project items on no timeline (video, audio, stills, mattes, captions…), and on disk the unused imported files, their proxies, and media files sitting in the source folders that were never used. Delivery/render folders (Edited, Export, Xuất file, Render, Final, Bàn giao…) and the files in use with their proxies are always kept. keepSequences: only these sequences count as the job (the others are listed for removal too). Writes a report in ~/Library/Application Support/MCP Adobe/Don dep and returns a summary for the user to check. Then clean_unused_media.',
       inputSchema: z.object({
         keepSequences: z.array(z.string()).optional().describe('Sequence names that make the job (default: every sequence is kept and counts as used)'),
         jobFolder: z.string().optional().describe('Job folder: only files inside it may go to the Trash (default: the project\'s folder, or its parent when the project sits in a Project/Premiere/AE subfolder). Files from elsewhere (Soundly, music libraries) are only removed from the project.'),
@@ -516,12 +516,12 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     },
     {
       name: 'clean_unused_media',
-      description: 'Act on a review_unused_media report after anh has read it: saves a checkpoint of the project, checks usage again right now (anything used since the report is skipped), removes the unused items from the Premiere project (plus bins left empty by it) and saves, then moves the unused files to the macOS Trash with Finder (Put Back works; nothing is deleted for good — anh empties the Trash himself). confirm must be true. Needs Finder automation permission the first time.',
+      description: 'Act on a review_unused_media report after the user has read it: saves a checkpoint of the project, checks usage again right now (anything used since the report is skipped), removes the unused items from the Premiere project (plus bins left empty by it) and saves, then moves the unused files to the macOS Trash with Finder (Put Back works; nothing is deleted for good — the user empties the Trash). confirm must be true. Needs Finder automation permission the first time.',
       inputSchema: z.object({
         report: z.string().describe('Report path returned by review_unused_media'),
         removeFromProject: z.boolean().optional().describe('Remove the unused items from the project (default true)'),
         trashFiles: z.boolean().optional().describe('Move the unused files to the Trash (default true)'),
-        confirm: z.boolean().describe('Must be true: anh has checked the report')
+        confirm: z.boolean().describe('Must be true: the user has checked the report')
       })
     }
   ];
@@ -650,7 +650,7 @@ return JSON.stringify({success:true,sequence:seq.name,sequenceId:seq.sequenceID,
 }
 
 /**
- * What the media engine should look at: the clips anh kept in the project
+ * What the media engine should look at: the clips the user kept in the project
  * (after filtering the junk) with the proxies attached in Premiere, passed as a
  * --danh-sach file; or a whole folder when nothing from it is imported.
  */
@@ -781,7 +781,7 @@ async function findShots(bridge: PremiereProTransport, args: Record<string, any>
   const job = await runMedia(cli, (args.waitSeconds ?? 45) * 1000, true);
   const problem = mediaProblem(job, 'find_shots');
   if (problem) {
-    if (problem.missingModel) problem.hint = 'Shot search needs SigLIP 2: run `uv run media tai-model --json` in MCP Adobe/Media (about 380 MB, ask anh first).';
+    if (problem.missingModel) problem.hint = 'Shot search needs SigLIP 2: run `uv run media tai-model --json` in MCP Adobe/Media (about 380 MB, ask the user first).';
     return problem;
   }
   const out = parseMedia(job);
@@ -1970,7 +1970,7 @@ async function reviewUnused(bridge: PremiereProTransport, args: Record<string, a
     inUse: inUse.length, removeFromProject: plan.removeFromProject.length, toTrash: trash.length, frees: humanSize(total),
     biggest: [...trash].sort((a, b) => b.size - a.size).slice(0, 20).map((t) => `${humanSize(t.size)}  ${t.path}  (${t.ly_do})`),
     projectItems: plan.removeFromProject.slice(0, 40).map((i) => `${i.name} — ${i.ly_do}`),
-    next: `Show anh the list. When he agrees: clean_unused_media { report: "${file}", confirm: true }`
+    next: `Show the user the list. When they agree: clean_unused_media { report: "${file}", confirm: true }`
   };
 }
 

@@ -9,9 +9,9 @@ const LUT = { file: "/luts/QT Gamma Compensation.cube", is3d: false };
 describe("deliverables", () => {
   it("names files <Khách> <Tên> <Tỉ lệ> V<n> with the next free version", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "xuat-"));
-    expect(deliverableName(dir, "AEON", "Workshop tuần 3", "9x16", ".mp4")).toBe("AEON Workshop tuần 3 9x16 V1.mp4");
-    writeFileSync(path.join(dir, "AEON Workshop tuần 3 9x16 V1.mp4"), "");
-    expect(deliverableName(dir, "AEON", "Workshop tuần 3", "9x16", ".mp4")).toBe("AEON Workshop tuần 3 9x16 V2.mp4");
+    expect(deliverableName(dir, "Studio", "Workshop week 3", "9x16", ".mp4")).toBe("Studio Workshop week 3 9x16 V1.mp4");
+    writeFileSync(path.join(dir, "Studio Workshop week 3 9x16 V1.mp4"), "");
+    expect(deliverableName(dir, "Studio", "Workshop week 3", "9x16", ".mp4")).toBe("Studio Workshop week 3 9x16 V2.mp4");
     expect(deliverableName(dir, "A/B", "x", "1x1", ".mp4", 4)).toBe("A B x 1x1 V4.mp4");
   });
 
@@ -67,7 +67,7 @@ describe("deliverables", () => {
 });
 
 describe("bitrateFor", () => {
-  it("Full HD class 50 Mbps, 4K class 20 Mbps (anh Quang's AME setting)", () => {
+  it("Full HD class 50 Mbps, 4K class 20 Mbps (owner's AME setting)", () => {
     expect(bitrateFor(1920, 1080, 60)).toEqual({ kbps: 50_000, maxKbps: 75_000, capped: false });
     expect(bitrateFor(1080, 1920, 60).kbps).toBe(50_000);
     expect(bitrateFor(1080, 1080, 60).kbps).toBe(50_000);

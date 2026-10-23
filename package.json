@@ -1,7 +1,7 @@
 {
-  "name": "adobe-premiere-pro-mcp",
+  "name": "mcp-premiere-pro",
   "version": "1.2.0",
-  "description": "MCP Bridge for Adobe Premiere Pro with 283 tools for AI-driven video editing.",
+  "description": "MCP server for Adobe Premiere Pro: proxy-first, cue-based rough cuts, shot search, beat cuts, colour, captions and delivery exports driven from Claude.",
   "main": "dist/index.js",
   "bin": {
     "premiere-pro-mcp": "dist/cli.js"
@@ -17,11 +17,8 @@
     "scripts",
     "skills",
     "README.md",
-    "QUICKSTART.md",
     "CHANGELOG.md",
     "SECURITY.md",
-    "PRIVACY.md",
-    "TERMS.md",
     "LICENSE.md"
   ],
   "type": "module",
@@ -54,8 +51,16 @@
     "extendscript",
     "uxp"
   ],
-  "author": "hetpatel-11",
+  "author": "Miinwan",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Miinwan/mcp-premiere-pro.git"
+  },
+  "homepage": "https://github.com/Miinwan/mcp-premiere-pro#readme",
+  "bugs": {
+    "url": "https://github.com/Miinwan/mcp-premiere-pro/issues"
+  },
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"

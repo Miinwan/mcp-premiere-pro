@@ -1,6 +1,6 @@
 ---
 name: edit-premiere-project
-description: Install, verify, inspect, edit, and export local Adobe Premiere Pro projects through the Premiere MCP Bridge. Use for project discovery, timeline edits, media ingest, effects, captions, audio, and delivery exports.
+description: Install, verify, inspect, edit, and export local Adobe Premiere Pro projects through the Premiere MCP server. Use for project discovery, timeline edits, media ingest, effects, captions, audio, and delivery exports.
 ---
 
 # Edit Premiere Project
@@ -27,7 +27,9 @@ Operate Premiere through the `premiere-pro` MCP tools. Preserve the user's proje
 Install the companion bridge on the same computer as Premiere and Codex:
 
 ```bash
-npm install -g adobe-premiere-pro-mcp
+git clone https://github.com/Miinwan/mcp-premiere-pro.git
+cd mcp-premiere-pro
+npm install && npm run build && npm install -g .
 premiere-pro-mcp --install-cep
 premiere-pro-mcp --doctor
 ```

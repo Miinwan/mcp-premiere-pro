@@ -1,6 +1,6 @@
 // Project clean-up after delivery: which media a job no longer uses, a report
-// anh can read before anything happens, and moving the unused files to the
-// macOS Trash through Finder (never rm, never emptied: anh empties it himself).
+// the user can read before anything happens, and moving the unused files to the
+// macOS Trash through Finder (never rm, never emptied: the user empties it).
 // The report format is shared with the After Effects MCP (project.review_unused).
 
 import { spawn } from 'node:child_process';

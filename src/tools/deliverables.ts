@@ -42,7 +42,7 @@ export const PRESETS: Record<string, DeliverablePreset> = {
 export const MAX_FILE_BYTES = 1_000_000_000;
 
 /**
- * VBR 1-pass video bitrate (kbps) for a frame size, as anh Quang set it in AME:
+ * VBR 1-pass video bitrate (kbps) for a frame size, as set in the owner's AME preset:
  * Full HD class 50 Mbps, 4K class (more pixels than 2560x1440) 20 Mbps. A long
  * video is brought down so video + audio stay under 1 GB with a 3% margin for
  * the container and rate-control overshoot. Pure, for tests.

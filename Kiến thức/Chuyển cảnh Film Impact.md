@@ -1,18 +1,18 @@
-# Chuyển cảnh Film Impact — tên gọi trong Premiere 2026, khi nào dùng, thời lượng
+# Film Impact transitions — names in Premiere 2026, when to use them, durations
 
-Cập nhật 23/10/2026. Film Impact đã nằm sẵn trong danh sách Video Transitions của Premiere 26.5 (không còn tiền tố "Impact"). Áp bằng tên qua `add_transition`, `add_transition_to_clip` hoặc `batch_add_transitions { sequenceId, trackIndex, transitionName, duration }` (đã chạy thật: "Light Leak" trên mọi điểm cắt). Panel "Film Impact Dashboard" chỉ để duyệt và chỉnh; tham số chi tiết chỉnh trong Effect Controls sau khi áp.
+Updated 2026-10-23. Film Impact ships inside Premiere 26.5's Video Transitions list (no "Impact" prefix any more). Apply by name with `add_transition`, `add_transition_to_clip` or `batch_add_transitions { sequenceId, trackIndex, transitionName, duration }` (tested for real: "Light Leak" on every cut). The "Film Impact Dashboard" panel is only for browsing and tweaking; fine-tune parameters in Effect Controls after applying.
 
-| Nhóm | Tên transition | Dùng khi | Thời lượng gợi ý |
+| Family | Transition names | Use for | Suggested duration |
 |---|---|---|---|
-| Ánh sáng | Light Leak, Chroma Leak, Light Sweep, Flare, Flash, Glow, Ray | Hotel, resort, F&B sang, chuyển cảnh mềm có cảm xúc; Flash cho event recap theo beat | Leak 16–24 frame; Flash 4–8 frame |
-| Chuyển động | Push, Slide, Whip, Pull Motion, Pop Motion, Spin Motion, Spring Motion, Travel Motion, Block Motion, Flip Motion, Fold Motion, Motion Tween | Reel nhịp nhanh, F&B, mall sale; Whip theo hướng máy lia | 8–12 frame, đặt đúng beat |
-| 3D | 3D Roll, 3D Spinback, Page Peel, Roll, Film Roll | Đổi chủ đề, giới thiệu món, trang sự kiện | 12–16 frame |
-| Nhòe, zoom | Zoom Blur, Directional Blur, Radial Blur, Lens Blur, Blur Dissolve, Cross Zoom | Dồn năng lượng, cắt cùng hướng chuyển động; Blur Dissolve cho resort nhịp chậm | 8–14 frame |
-| Méo, nhiễu | Glitch, VHS Damage, Earthquake, Chaos, Liquid Distortion, Wave, Phosphor, TV Power | Teaser trẻ, sự kiện âm nhạc, nhấn beat mạnh | 4–10 frame |
-| Hình khối | Linear Wipe, Radial Wipe, Clock Wipe, Star Wipe, Neon Wipe, Panel Wipe, Plateau Wipe, Shape Flow, Shape Dissolve, Stripe, Slice, Mosaic, Kaleidoscope, Mirror, Split, Stretch, Stretch Wipe | Thiết kế đồ hoạ, menu, khuyến mãi | 10–16 frame |
-| Mềm cổ điển | Cross Dissolve, Additive Dissolve, Film Dissolve, Luma Fade, Dip to Black, Dip to White, Dip to Color, Non-Additive Dissolve | Resort chậm, phỏng vấn, kết video | 12–24 frame |
-| Chữ | Typewriter, Text Animator | Chuyển cảnh mang chữ | theo độ dài chữ |
+| Light | Light Leak, Chroma Leak, Light Sweep, Flare, Flash, Glow, Ray | Hotels, resorts, premium F&B, soft emotional changes; Flash for event recaps on the beat | Leaks 16–24 frames; Flash 4–8 frames |
+| Motion | Push, Slide, Whip, Pull Motion, Pop Motion, Spin Motion, Spring Motion, Travel Motion, Block Motion, Flip Motion, Fold Motion, Motion Tween | Fast reels, F&B, retail sales; Whip following the camera pan | 8–12 frames, exactly on the beat |
+| 3D | 3D Roll, 3D Spinback, Page Peel, Roll, Film Roll | Topic changes, introducing a dish, event chapters | 12–16 frames |
+| Blur, zoom | Zoom Blur, Directional Blur, Radial Blur, Lens Blur, Blur Dissolve, Cross Zoom | Building energy, cutting along the direction of motion; Blur Dissolve for slow resort pieces | 8–14 frames |
+| Distortion, noise | Glitch, VHS Damage, Earthquake, Chaos, Liquid Distortion, Wave, Phosphor, TV Power | Youth teasers, music events, hard beat hits | 4–10 frames |
+| Shapes | Linear Wipe, Radial Wipe, Clock Wipe, Star Wipe, Neon Wipe, Panel Wipe, Plateau Wipe, Shape Flow, Shape Dissolve, Stripe, Slice, Mosaic, Kaleidoscope, Mirror, Split, Stretch, Stretch Wipe | Graphic design, menus, promotions | 10–16 frames |
+| Classic soft | Cross Dissolve, Additive Dissolve, Film Dissolve, Luma Fade, Dip to Black, Dip to White, Dip to Color, Non-Additive Dissolve | Slow resort pieces, interviews, endings | 12–24 frames |
+| Text | Typewriter, Text Animator | Transitions that carry text | Depends on text length |
 
-Nguyên tắc: một video chỉ dùng 1–2 họ transition chính; không đặt transition lên cut đang có nhịp nhạc mạnh mà không khớp beat; job khác nhau thì đổi họ, không lặp một kiểu cho mọi job.
+Rules: one video uses one or two main transition families; never put a transition on a cut with a strong music hit unless it lands on the beat; change families between jobs instead of repeating one style everywhere.
 
-Chọn theo tình huống (Premiere và After Effects chung một bảng): `After Effects/Kiến thức/Công thức/Chọn chuyển cảnh.md` (đọc bằng ae_guide).
+Choosing by situation (one table shared by Premiere and After Effects): `After Effects/Kiến thức/Công thức/Chọn chuyển cảnh.md` (read with ae_guide).

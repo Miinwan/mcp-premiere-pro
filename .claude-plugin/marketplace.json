@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
-  "name": "adobe-premiere-pro-mcp",
+  "name": "mcp-premiere-pro",
   "owner": {
-    "name": "Het Patel"
+    "name": "Miinwan"
   },
   "metadata": {
     "description": "Claude Code integration for local Adobe Premiere Pro editing through MCP."
