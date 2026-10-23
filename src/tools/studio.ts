@@ -66,7 +66,7 @@ async function runMedia(args: string[], waitMs: number, fast: boolean): Promise<
     const j: MediaJob = { key, args, started: Date.now(), done: false, code: null, stdout: '', stderrTail: [], waiters: [] };
     const child = spawn(uvPath(), ['run', 'media', ...args], {
       cwd: MEDIA_DIR,
-      env: { ...process.env, ...(fast ? { MEDIA_CHE_DO: 'nhanh', WCUT_CHE_DO: 'nhanh' } : {}) }
+      env: { ...process.env, ...(fast ? { MEDIA_CHE_DO: 'nhanh' } : {}) }
     });
     child.stdout.on('data', (d) => { j.stdout += d.toString(); });
     child.stderr.on('data', (d) => {
