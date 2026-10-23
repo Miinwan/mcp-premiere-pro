@@ -5,6 +5,7 @@ All notable changes are documented here. Releases use semantic versioning.
 
 ## [Unreleased] — Minwan (23/10/2026)
 
+- Xuất file theo setting anh Quang chốt: mọi bản H.264 xử lý RGB 16-bit + scale chất lượng cao (Render at Maximum Depth / Maximum Render Quality), progressive, square pixel, BT.709; VBR 1 pass Full HD 50 Mbps, 4K 20 Mbps, tự hạ bitrate để file ≤ 1 GB (`bitrateFor`); áp LUT QT Gamma Compensation (env `MCP_QT_GAMMA_LUT`, thiếu file thì báo lỗi), không áp cho master ProRes/PNG. Giữ ffmpeg thay vì preset .epr vì trần 1 GB phải tính theo thời lượng.
 - `transcribe_to_captions`: phụ đề từ lời thoại media engine đã nghe (`.media`), chỉ lấy chữ trong in/out của từng clip, chia dòng theo số ký tự, ghi `Phụ đề/<sequence>.srt` và tạo caption track.
 - `export_deliverables` / `export_status`: master ProRes 422 HQ qua Adobe Media Encoder, deliverable chạy nền bằng ffmpeg với cùng bảng preset và cách đặt tên như MCP After Effects; âm lượng đo trước, mix thô được nén nhẹ rồi chuẩn hoá.
 - `checkpoint_project` (lưu bản sao .prproj có nhãn trước thay đổi lớn), `organize_project_bins` (bin 01 Footage → 06 Proxies & renders, có chạy thử), `qc_before_export` (offline, clip tắt, khoảng đen, mảnh 1–2 frame, marker đỏ, track trống/tắt tiếng, khung sai, proxy đang bật; báo theo timecode).

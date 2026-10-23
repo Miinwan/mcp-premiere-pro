@@ -4,7 +4,7 @@
 // keep the two identical (After Effects: src/deliverables.ts).
 
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 
@@ -17,8 +17,8 @@ export interface DeliverablePreset {
   /** Aspect tag used in the file name. */
   aspect: string;
   codec: "h264" | "prores_hq" | "png";
-  bitrate?: string;
-  maxrate?: string;
+  /** Fixed target (kbps) instead of bitrateFor()'s size class; still capped to 1 GB. */
+  kbps?: number;
   audio: "aac" | "pcm" | "none";
   /** Integrated loudness target (LUFS); null leaves the mix as it is. */
   lufs: number | null;
@@ -27,16 +27,40 @@ export interface DeliverablePreset {
 }
 
 export const PRESETS: Record<string, DeliverablePreset> = {
-  youtube_4k: { id: "youtube_4k", label: "YouTube 4K", width: 3840, height: 2160, aspect: "16x9", codec: "h264", bitrate: "45M", maxrate: "60M", audio: "aac", lufs: -14, note: "H.264 High VBR 45 Mbps, AAC 320k, -14 LUFS (YouTube chuẩn hoá về -14)" },
-  youtube_1080: { id: "youtube_1080", label: "YouTube 1080", width: 1920, height: 1080, aspect: "16x9", codec: "h264", bitrate: "16M", maxrate: "24M", audio: "aac", lufs: -14, note: "H.264 High VBR 16 Mbps, AAC 320k, -14 LUFS" },
-  reels: { id: "reels", label: "Reels / TikTok", width: 1080, height: 1920, aspect: "9x16", codec: "h264", bitrate: "14M", maxrate: "20M", audio: "aac", lufs: -14, note: "1080x1920 H.264 14 Mbps, AAC 320k, -14 LUFS; chữ trong vùng an toàn (trừ 250 px trên, 420 px dưới)" },
-  feed_4x5: { id: "feed_4x5", label: "Feed 4:5", width: 1080, height: 1350, aspect: "4x5", codec: "h264", bitrate: "12M", maxrate: "16M", audio: "aac", lufs: -14, note: "1080x1350 H.264 12 Mbps, AAC 320k, -14 LUFS" },
-  square: { id: "square", label: "Vuông 1:1", width: 1080, height: 1080, aspect: "1x1", codec: "h264", bitrate: "12M", maxrate: "16M", audio: "aac", lufs: -14, note: "1080x1080 H.264 12 Mbps, AAC 320k, -14 LUFS" },
-  led: { id: "led", label: "LED", width: null, height: null, aspect: "LED", codec: "h264", bitrate: "40M", maxrate: "50M", audio: "none", lufs: null, note: "Đúng kích thước pixel màn hình mall (truyền width/height), H.264 40 Mbps, không tiếng trừ khi brief yêu cầu" },
-  review: { id: "review", label: "Bản review", width: null, height: 720, aspect: "review", codec: "h264", bitrate: "5M", maxrate: "7M", audio: "aac", lufs: -14, watermark: true, note: "Cao 720 px, 5 Mbps, watermark 'BẢN REVIEW' và timecode để khách góp ý theo giây" },
-  master: { id: "master", label: "Master ProRes 422 HQ", width: null, height: null, aspect: "Master", codec: "prores_hq", audio: "pcm", lufs: null, note: "ProRes 422 HQ, PCM 24-bit 48 kHz, giữ nguyên mix" },
-  png_alpha: { id: "png_alpha", label: "PNG sequence alpha", width: null, height: null, aspect: "PNG", codec: "png", audio: "none", lufs: null, note: "Chuỗi PNG RGBA trong một thư mục, cho overlay" },
+  youtube_4k: { id: "youtube_4k", label: "YouTube 4K", width: 3840, height: 2160, aspect: "16x9", codec: "h264", audio: "aac", lufs: -14, note: "H.264 High VBR 1 pass 20 Mbps (≤ 1 GB), LUT QT Gamma, AAC 320k, -14 LUFS (YouTube chuẩn hoá về -14)" },
+  youtube_1080: { id: "youtube_1080", label: "YouTube 1080", width: 1920, height: 1080, aspect: "16x9", codec: "h264", audio: "aac", lufs: -14, note: "H.264 High VBR 1 pass 50 Mbps (≤ 1 GB), LUT QT Gamma, AAC 320k, -14 LUFS" },
+  reels: { id: "reels", label: "Reels / TikTok", width: 1080, height: 1920, aspect: "9x16", codec: "h264", audio: "aac", lufs: -14, note: "1080x1920 H.264 VBR 1 pass 50 Mbps (≤ 1 GB), LUT QT Gamma, AAC 320k, -14 LUFS; chữ trong vùng an toàn (trừ 250 px trên, 420 px dưới)" },
+  feed_4x5: { id: "feed_4x5", label: "Feed 4:5", width: 1080, height: 1350, aspect: "4x5", codec: "h264", audio: "aac", lufs: -14, note: "1080x1350 H.264 VBR 1 pass 50 Mbps (≤ 1 GB), LUT QT Gamma, AAC 320k, -14 LUFS" },
+  square: { id: "square", label: "Vuông 1:1", width: 1080, height: 1080, aspect: "1x1", codec: "h264", audio: "aac", lufs: -14, note: "1080x1080 H.264 VBR 1 pass 50 Mbps (≤ 1 GB), LUT QT Gamma, AAC 320k, -14 LUFS" },
+  led: { id: "led", label: "LED", width: null, height: null, aspect: "LED", codec: "h264", audio: "none", lufs: null, note: "Đúng kích thước pixel màn hình mall (truyền width/height), H.264 VBR 1 pass theo khung (≤ 1 GB), LUT QT Gamma, không tiếng trừ khi brief yêu cầu" },
+  review: { id: "review", label: "Bản review", width: null, height: 720, aspect: "review", codec: "h264", kbps: 5000, audio: "aac", lufs: -14, watermark: true, note: "Cao 720 px, 5 Mbps, LUT QT Gamma, watermark 'BẢN REVIEW' và timecode để khách góp ý theo giây" },
+  master: { id: "master", label: "Master ProRes 422 HQ", width: null, height: null, aspect: "Master", codec: "prores_hq", audio: "pcm", lufs: null, note: "ProRes 422 HQ, PCM 24-bit 48 kHz, giữ nguyên mix, không LUT" },
+  png_alpha: { id: "png_alpha", label: "PNG sequence alpha", width: null, height: null, aspect: "PNG", codec: "png", audio: "none", lufs: null, note: "Chuỗi PNG RGBA trong một thư mục, cho overlay, không LUT" },
 };
+
+/** Largest H.264 deliverable: 1 GB (decimal, as Finder and upload forms count it). */
+export const MAX_FILE_BYTES = 1_000_000_000;
+
+/**
+ * VBR 1-pass video bitrate (kbps) for a frame size, as anh Quang set it in AME:
+ * Full HD class 50 Mbps, 4K class (more pixels than 2560x1440) 20 Mbps. A long
+ * video is brought down so video + audio stay under 1 GB with a 3% margin for
+ * the container and rate-control overshoot. Pure, for tests.
+ */
+export function bitrateFor(width: number, height: number, durationSec: number, opts: { audioKbps?: number; kbps?: number | undefined } = {}): { kbps: number; maxKbps: number; capped: boolean } {
+  const base = opts.kbps ?? (width * height > 2560 * 1440 ? 20_000 : 50_000);
+  let kbps = base;
+  if (durationSec > 0 && Number.isFinite(durationSec)) {
+    const budget = Math.floor((MAX_FILE_BYTES * 8 * 0.97) / durationSec / 1000 - (opts.audioKbps ?? 320));
+    kbps = Math.max(100, Math.min(base, budget));
+  }
+  return { kbps, maxKbps: Math.round(kbps * 1.5), capped: kbps < base };
+}
+
+/** Adobe's QT Gamma Compensation LUT (env MCP_QT_GAMMA_LUT overrides the path). */
+export function qtGammaLutPath(): string {
+  return process.env.MCP_QT_GAMMA_LUT || "/Users/minwan/Desktop/01. Personal/Resources/QT Gamma Compensation.cube";
+}
 
 export function ffmpegPath(): string {
   for (const p of [process.env.FFMPEG_PATH, "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", path.join(homedir(), ".local/bin/ffmpeg")]) {
@@ -58,7 +82,6 @@ export function deliverableName(dir: string, client: string, title: string, aspe
   return `${stem} V999${ext}`;
 }
 
-/** ffmpeg arguments for one preset. Pure, for tests. */
 /**
  * Audio filter that lands a mix on `target` LUFS with peaks under -1 dBTP.
  * A finished mix (small gain, normal range) gets loudnorm's exact linear
@@ -81,13 +104,33 @@ export function loudnessFilter(target: number, m: Loudness | null): string {
 
 export interface Loudness { input_i: string; input_tp: string; input_lra: string; input_thresh: string; target_offset: string }
 
-/** ffmpeg arguments for one preset; `measured` (first loudnorm pass) makes the gain exact. Pure, for tests. */
-export function ffmpegArgs(p: DeliverablePreset, input: string, output: string, opts: { width?: number; height?: number; watermark?: string; font?: string; measured?: Loudness | null } = {}): string[] {
+/** ffmpeg filter that applies a .cube LUT (1D or 3D, from the file header). */
+export function lutFilter(file: string, is3d: boolean): string {
+  if (/[':\\]/.test(file)) throw new Error(`LUT path cannot contain ' : or \\ (ffmpeg filter syntax): ${file}`);
+  return `${is3d ? "lut3d" : "lut1d"}=file='${file}'`;
+}
+
+/** Highest-quality scaler, the "Maximum Render Quality" of Premiere/AE. */
+const HQ = "flags=lanczos+accurate_rnd+full_chroma_int";
+
+/**
+ * ffmpeg arguments for one preset. `measured` (first loudnorm pass) makes the
+ * gain exact; `kbps` comes from bitrateFor(); `lut` is the colour LUT applied to
+ * every H.264 file ({ file, is3d }, null for none). Pure, for tests.
+ */
+export function ffmpegArgs(p: DeliverablePreset, input: string, output: string, opts: { width?: number; height?: number; watermark?: string; font?: string; measured?: Loudness | null; kbps?: number | undefined; lut?: { file: string; is3d: boolean } | null } = {}): string[] {
   const w = opts.width ?? p.width;
   const h = opts.height ?? p.height;
+  const h264 = p.codec === "h264";
   const vf: string[] = [];
-  if (w && h) vf.push(`scale=${w}:${h}:force_original_aspect_ratio=decrease:flags=lanczos`, `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=black`);
-  else if (h) vf.push(`scale=-2:${h}:flags=lanczos`);
+  // H.264 is graded in 16-bit RGB ("Render at Maximum Depth"): BT.709 in, LUT,
+  // resize, back to BT.709 4:2:0 once at the end.
+  if (h264) vf.push(`scale=in_color_matrix=bt709:in_range=tv:${HQ}`, "format=gbrp16le");
+  if (h264 && opts.lut) vf.push(lutFilter(opts.lut.file, opts.lut.is3d));
+  const flags = h264 ? HQ : "flags=lanczos";
+  if (w && h) vf.push(`scale=${w}:${h}:force_original_aspect_ratio=decrease:${flags}`, `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=black`);
+  else if (h) vf.push(`scale=-2:${h}:${flags}`);
+  if (h264) vf.push("setsar=1", `scale=out_color_matrix=bt709:out_range=tv:${HQ}`, "format=yuv420p");
   if (p.watermark) {
     const font = opts.font ?? "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
     const text = (opts.watermark ?? "BẢN REVIEW").replace(/[:'\\]/g, " ");
@@ -99,7 +142,12 @@ export function ffmpegArgs(p: DeliverablePreset, input: string, output: string, 
   // Video and audio only: AE markers come through as a chapter/data track.
   a.push("-map", "0:v:0", "-map", "0:a?", "-dn", "-map_chapters", "-1");
   if (vf.length) a.push("-vf", vf.join(","));
-  if (p.codec === "h264") a.push("-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-preset", "slow", "-b:v", p.bitrate!, "-maxrate", p.maxrate!, "-bufsize", p.maxrate!, "-movflags", "+faststart", "-write_tmcd", "0");
+  if (h264) {
+    // VBR 1 pass: average `kbps`, peaks to 1.5x. Frame rate and size follow the source / preset.
+    const kbps = opts.kbps ?? p.kbps ?? bitrateFor(w ?? 1920, h ?? 1080, 0).kbps;
+    const max = Math.round(kbps * 1.5);
+    a.push("-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-preset", "slow", "-b:v", `${kbps}k`, "-maxrate", `${max}k`, "-bufsize", `${max}k`, "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv", "-movflags", "+faststart", "-write_tmcd", "0");
+  }
   if (p.codec === "prores_hq") a.push("-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0", "-pix_fmt", "yuv422p10le");
   if (p.audio === "none") a.push("-an");
   else {
@@ -143,6 +191,37 @@ export async function measureLufs(file: string): Promise<number | null> {
   return m ? Number(m[1]) : null;
 }
 
+export function ffprobePath(): string {
+  const ff = ffmpegPath();
+  const probe = path.join(path.dirname(ff), "ffprobe");
+  return ff !== "ffmpeg" && existsSync(probe) ? probe : "ffprobe";
+}
+
+/** Width, height and duration (s) of a file's first video stream; zeros when unreadable. */
+export async function probeVideo(file: string): Promise<{ width: number; height: number; duration: number }> {
+  const out = await new Promise<string>((resolve) => {
+    const c = spawn(ffprobePath(), ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height:format=duration", "-of", "json", file]);
+    let o = "";
+    c.stdout.on("data", (d) => (o += d.toString()));
+    c.on("close", () => resolve(o));
+    c.on("error", () => resolve(""));
+  });
+  try {
+    const j = JSON.parse(out) as { streams?: { width?: number; height?: number }[]; format?: { duration?: string } };
+    return { width: j.streams?.[0]?.width ?? 0, height: j.streams?.[0]?.height ?? 0, duration: Number(j.format?.duration) || 0 };
+  } catch {
+    return { width: 0, height: 0, duration: 0 };
+  }
+}
+
+/** The QT Gamma LUT and whether it is 3D, or an error when the file is missing. */
+export function loadLut(file = qtGammaLutPath()): { file: string; is3d: boolean } | { error: string } {
+  if (!existsSync(file)) return { error: `QT Gamma Compensation LUT not found at ${file}; set MCP_QT_GAMMA_LUT to the .cube file` };
+  if (/[':\\]/.test(file)) return { error: `LUT path cannot contain ' : or \\ (ffmpeg filter syntax): ${file}` };
+  const head = readFileSync(file, "utf8").slice(0, 4096);
+  return { file, is3d: /^\s*LUT_3D_SIZE/m.test(head) };
+}
+
 export interface DeliverableResult {
   preset: string;
   ok: boolean;
@@ -150,6 +229,9 @@ export interface DeliverableResult {
   error?: string;
   lufs?: number | null;
   seconds?: number;
+  /** H.264 only: video bitrate used and whether the 1 GB cap lowered it. */
+  kbps?: number;
+  capped?: boolean;
 }
 
 /** Encode one deliverable from `master` into `dir` and log it in `dir/Kết quả xuất.md`. */
@@ -166,18 +248,30 @@ export async function encode(master: string, dir: string, presetId: string, nami
     mkdirSync(out, { recursive: true });
     out = path.join(out, "frame_%05d.png");
   }
+  let rate: { kbps: number; capped: boolean } | undefined;
+  let lut: { file: string; is3d: boolean } | null = null;
+  if (p.codec === "h264") {
+    const l = loadLut();
+    if ("error" in l) return { preset: presetId, ok: false, error: l.error };
+    lut = l;
+    const src = await probeVideo(master);
+    const w = opts.width ?? p.width ?? (p.height && src.height ? Math.round((src.width * p.height) / src.height) : src.width);
+    const h = opts.height ?? p.height ?? src.height;
+    rate = bitrateFor(w, h, src.duration, { audioKbps: p.audio === "none" ? 0 : 320, kbps: p.kbps });
+  }
   const t0 = Date.now();
   const measured = p.lufs !== null && p.audio !== "none" ? await measureForLoudnorm(master, p.lufs) : null;
-  const r = await run(ffmpegPath(), ffmpegArgs(p, master, out, { ...opts, measured }));
+  const r = await run(ffmpegPath(), ffmpegArgs(p, master, out, { ...opts, measured, kbps: rate?.kbps, lut }));
   const seconds = Math.round((Date.now() - t0) / 100) / 10;
   if (r.code !== 0) return { preset: presetId, ok: false, error: r.err.slice(-600), seconds };
   const file = p.codec === "png" ? path.dirname(out) : out;
   const lufs = p.audio !== "none" && p.codec !== "png" ? await measureLufs(file) : null;
-  const line = `- ${new Date().toLocaleString("vi-VN")} · ${path.basename(file)} · ${p.label} · ${p.note}${lufs !== null ? ` · đo được ${lufs} LUFS` : ""} · ${seconds} s\n`;
+  const rateNote = rate ? ` · ${Math.round(rate.kbps / 100) / 10} Mbps${rate.capped ? " (hạ để ≤ 1 GB)" : ""}` : "";
+  const line = `- ${new Date().toLocaleString("vi-VN")} · ${path.basename(file)} · ${p.label} · ${p.note}${rateNote}${lufs !== null ? ` · đo được ${lufs} LUFS` : ""} · ${seconds} s\n`;
   const log = path.join(dir, "Kết quả xuất.md");
   if (!existsSync(log)) appendFileSync(log, "# Kết quả xuất\n\n");
   appendFileSync(log, line);
-  return { preset: presetId, ok: true, file, lufs, seconds };
+  return { preset: presetId, ok: true, file, lufs, seconds, ...(rate ? { kbps: rate.kbps, capped: rate.capped } : {}) };
 }
 
 // ---------------------------------------------------------------- background jobs
