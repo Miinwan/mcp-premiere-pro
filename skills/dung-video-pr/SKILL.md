@@ -8,7 +8,8 @@ description: Dựng hoặc sửa video trong Premiere bằng MCP premiere-pro ch
 Gọi anh, xưng em, tiếng Việt, không emoji.
 
 1. **Nắm bối cảnh**: `verify_premiere_connection`, `get_project_info`; `pr_guide` (chuyển cảnh Film Impact, plugin Mako, xuất file). Không xoá hay sửa folder source gốc; làm trên project anh chỉ định.
-2. **Source**: `rough_cut_by_cues { sourceFolder, frame }` cắt take theo khẩu lệnh 3-2-1 / action / diễn / đi đến cắt / ok, đặt a→z để anh tự xếp; `describe_sources` ghi mô tả shot vào Project panel. Lần đầu chạy lâu: gọi lại để lấy kết quả.
+2. **Proxy trước tiên**: `create_proxies { sourceFolder }` (ProRes Proxy 1/2 bằng phần cứng, tự gắn vào clip, `proxy_status` xem tiến độ) để máy nhẹ và mát; sau đó mới phân tích và dựng.
+   **Source**: `rough_cut_by_cues { sourceFolder, frame }` cắt take theo khẩu lệnh 3-2-1 / action / diễn / đi đến cắt / ok, đặt a→z để anh tự xếp; `describe_sources` ghi mô tả shot vào Project panel. Lần đầu chạy lâu: gọi lại để lấy kết quả.
 3. **Plan**: job lớn thì trình thứ tự, nhịp, chuyển cảnh (1–2 họ Film Impact hợp brief, mỗi job một kiểu) và chờ anh duyệt.
 4. **Dựng**: transition theo tên (`batch_add_transitions`), màu `add_color_layer` (adjustment + Lumetri), thao tác nhanh qua `mako` (QC, fit/fill, freeze, nest…), nền logo `add_color_matte`. Hiệu ứng phức tạp: `send_to_after_effects` → MCP after-effects `bridge.from_premiere` → làm → `bridge.to_premiere` → `return_from_after_effects`.
 5. **Tự xem**: mở sequence rồi `export_frame` ở các điểm quan trọng; `mako { action: "quality_check" }` trước khi giao.

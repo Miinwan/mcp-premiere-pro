@@ -11,7 +11,7 @@ const take = (stt: number, file: string, n: number, vao: number, ra: number, tin
 describe('studio tools', () => {
   it('registers the four tools', () => {
     const names = getStudioTools(new Set()).map((t) => t.name);
-    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers']);
+    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers', 'create_proxies', 'proxy_status']);
     expect(isStudioTool('rough_cut_by_cues')).toBe(true);
     expect(getStudioTools(new Set(['describe_sources'])).map((t) => t.name)).not.toContain('describe_sources');
   });
@@ -59,5 +59,16 @@ describe('colour matte', () => {
     expect(matteColor('đen')).toEqual({ rgb: [0, 0, 0], label: 'đen' });
     expect(matteColor('#B6006B').rgb).toEqual([182, 0, 107]);
     expect(() => matteColor('hồng')).toThrow();
+  });
+});
+
+describe('proxies', () => {
+  it('hardware ProRes Proxy at half size, audio kept', () => {
+    const { proxyArgs } = require('../../tools/studio.js');
+    const a = proxyArgs('in.mp4', 'out.mov', '1/2', 'prores_proxy').join(' ');
+    expect(a).toContain('prores_videotoolbox -profile:v proxy');
+    expect(a).toContain('scale=trunc(iw/2/2)*2:trunc(ih/2/2)*2');
+    expect(a).toContain('-map 0:a?');
+    expect(proxyArgs('i', 'o', '1/4', 'h264').join(' ')).toContain('h264_videotoolbox');
   });
 });

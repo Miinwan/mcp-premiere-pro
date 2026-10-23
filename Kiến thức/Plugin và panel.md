@@ -7,3 +7,5 @@ Cập nhật 23/10/2026.
 - **Premiere Composer / Animation Composer** (Mister Horse): thư viện preset trên cloud, mã hoá trong plugin, chỉ áp qua panel; MCP không gọi được ổn định. Khi brief cần kiểu của Composer, anh áp tay hoặc dùng kiểu tương đương của MCP After Effects (`anim.*`, `template.*`, `anim.scene_transition`).
 - **Motion Bro, Motion Array, Epidemic Sound, BeatEdit, AutoCut**: panel dùng tay; BeatEdit/AutoCut sau này có thể thay bằng engine Media (beat, cắt lặng).
 - Nền màu cho logo: `add_color_matte` (trắng/đen/mã màu), không dùng Color Matte của Premiere vì nó mở hộp chọn màu làm treo script.
+
+- **Proxy**: bước đầu tiên của mọi job có footage 4K — `create_proxies` (Proxies/ cạnh source, gắn sẵn; bật Toggle Proxies trong Program Monitor khi dựng, tắt khi xuất).

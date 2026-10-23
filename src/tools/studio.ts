@@ -31,7 +31,9 @@ export const studioToolNames = [
   'export_deliverables',
   'export_status',
   'add_scene_color_layers',
-  'sync_color_layers'
+  'sync_color_layers',
+  'create_proxies',
+  'proxy_status'
 ] as const;
 
 export function isStudioTool(name: string): boolean {
@@ -341,6 +343,23 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         fromPlayhead: z.boolean().optional().describe('Use the instance under the playhead as the master for its group (default false: the first instance)')
       })
     }
+    ,{
+      name: 'create_proxies',
+      description:
+        'FIRST STEP of a job: make edit proxies for every video in a footage folder so Premiere (and the media engine) work on light files instead of 4K. ProRes Proxy with the Mac hardware encoder (VideoToolbox, cool and fast), half resolution by default (4K → 1080p), same fps, duration and audio channels so Premiere accepts them; saved as "<folder>/Proxies/<name>_Proxy.mov", one file at a time at low priority so the machine stays cool. Existing proxies are reused. When done, attaches each proxy to its clip in the open project (Toggle Proxies in Premiere switches). Runs in the background: check with proxy_status.',
+      inputSchema: z.object({
+        sourceFolder: z.string().describe('Absolute footage folder'),
+        size: z.enum(['1/2', '1/4']).optional().describe('Proxy resolution (default 1/2)'),
+        codec: z.enum(['prores_proxy', 'h264']).optional().describe('prores_proxy (default, best for editing) or h264 (smaller)'),
+        attach: z.boolean().optional().describe('Attach to clips already in the project when done (default true)'),
+        waitSeconds: z.number().optional().describe('How long to wait in this call (default 20)')
+      })
+    },
+    {
+      name: 'proxy_status',
+      description: 'Progress of a create_proxies job: files done, current file, attached proxies, failures.',
+      inputSchema: z.object({ jobId: z.string(), waitSeconds: z.number().optional() })
+    }
   ];
   return tools.filter((t) => !existingNames.has(t.name));
 }
@@ -363,6 +382,8 @@ export async function executeStudioTool(bridge: PremiereProTransport, name: stri
       case 'export_status': return await exportStatus(args);
       case 'add_scene_color_layers': return await addSceneColorLayers(bridge, args);
       case 'sync_color_layers': return await syncColorLayers(bridge, args);
+      case 'create_proxies': return await createProxies(bridge, args);
+      case 'proxy_status': return await proxyStatus(args);
     }
     return { success: false, error: 'unknown studio tool ' + name };
   } catch (e: any) {
@@ -915,4 +936,83 @@ for(var g in groups){var list=groups[g];if(list.length<2){out.push({layer:g,inst
 return JSON.stringify({success:true,groups:out});`;
   const r = await jsx(bridge, body, 300000);
   return { tool: 'sync_color_layers', ...r };
+}
+
+// ---------------------------------------------------------------- proxies
+
+const VIDEO_EXT = /\.(mp4|mov|mxf|mts|m2ts|avi|mkv)$/i;
+
+interface ProxyJob { id: string; state: 'running' | 'done' | 'failed'; folder: string; files: string[]; done: { file: string; proxy: string; reused: boolean; seconds: number }[]; failed: { file: string; error: string }[]; current: string | null; attached: any; started: number }
+const proxyJobs = new Map<string, ProxyJob>();
+
+/** ffmpeg arguments for one proxy. Pure, for tests. */
+export function proxyArgs(input: string, output: string, size: '1/2' | '1/4', codec: 'prores_proxy' | 'h264'): string[] {
+  const div = size === '1/4' ? 4 : 2;
+  const v = codec === 'h264'
+    ? ['-c:v', 'h264_videotoolbox', '-b:v', size === '1/4' ? '4M' : '10M', '-pix_fmt', 'yuv420p']
+    : ['-c:v', 'prores_videotoolbox', '-profile:v', 'proxy'];
+  return ['-y', '-hide_banner', '-loglevel', 'error', '-i', input, '-map', '0:v:0', '-map', '0:a?', '-dn',
+    '-vf', `scale=trunc(iw/${div}/2)*2:trunc(ih/${div}/2)*2`, ...v, '-c:a', 'pcm_s16le', '-threads', '4', output];
+}
+
+function proxyPath(folder: string, file: string): string {
+  return join(folder, 'Proxies', basename(file).replace(/\.[^.]+$/, '') + '_Proxy.mov');
+}
+
+async function createProxies(bridge: PremiereProTransport, args: Record<string, any>) {
+  const folder = String(args.sourceFolder);
+  if (!existsSync(folder)) return { success: false, error: `folder not found: ${folder}` };
+  const files = readdirSync(folder).filter((f) => VIDEO_EXT.test(f) && !f.startsWith('.')).map((f) => join(folder, f));
+  if (!files.length) return { success: false, error: 'no video files in that folder' };
+  const size = (args.size ?? '1/2') as '1/2' | '1/4';
+  const codec = (args.codec ?? 'prores_proxy') as 'prores_proxy' | 'h264';
+  mkdirSync(join(folder, 'Proxies'), { recursive: true });
+  const job: ProxyJob = { id: randomUUID().slice(0, 8), state: 'running', folder, files, done: [], failed: [], current: null, attached: null, started: Date.now() };
+  proxyJobs.set(job.id, job);
+  void (async () => {
+    const ff = existsSync('/opt/homebrew/bin/ffmpeg') ? '/opt/homebrew/bin/ffmpeg' : existsSync(join(homedir(), '.local/bin/ffmpeg')) ? join(homedir(), '.local/bin/ffmpeg') : 'ffmpeg';
+    for (const f of files) {
+      const out = proxyPath(folder, f);
+      if (existsSync(out)) { job.done.push({ file: f, proxy: out, reused: true, seconds: 0 }); continue; }
+      job.current = basename(f);
+      const t0 = Date.now();
+      const tmp = out.replace(/\.mov$/, '.part.mov');
+      const code = await new Promise<number>((resolve) => {
+        // nice: low priority so the machine stays responsive and cooler.
+        const c = spawn('nice', ['-n', '10', ff, ...proxyArgs(f, tmp, size, codec)]);
+        let err = '';
+        c.stderr.on('data', (d) => (err += d.toString()));
+        c.on('close', (code) => { if (code) job.failed.push({ file: f, error: err.slice(-300) }); resolve(code ?? -1); });
+        c.on('error', (e) => { job.failed.push({ file: f, error: String(e) }); resolve(-1); });
+      });
+      if (code === 0) {
+        const { renameSync } = await import('node:fs');
+        renameSync(tmp, out);
+        job.done.push({ file: f, proxy: out, reused: false, seconds: Math.round((Date.now() - t0) / 1000) });
+      }
+    }
+    job.current = null;
+    if (args.attach !== false && job.done.length) {
+      const pairs = job.done.map((d) => ({ file: d.file, proxy: d.proxy }));
+      job.attached = await jsx(bridge, `var pairs=${q(pairs)};var ok=[],miss=[],err=[];
+for(var i=0;i<pairs.length;i++){var it=__byPath(pairs[i].file);if(!it){miss.push(pairs[i].file);continue;}
+ try{if(it.hasProxy&&it.hasProxy()){ok.push(it.name+' (already)');continue;}var r=it.attachProxy(pairs[i].proxy,0);if(r===false)err.push(it.name);else ok.push(it.name);}catch(e){err.push(it.name+': '+e);}}
+return JSON.stringify({success:true,attached:ok,notInProject:miss.length,failed:err});`, 300000).catch((e: any) => ({ success: false, error: String(e) }));
+    }
+    job.state = job.failed.length ? 'failed' : 'done';
+  })();
+  return await proxyStatus({ jobId: job.id, waitSeconds: args.waitSeconds ?? 20 });
+}
+
+async function proxyStatus(args: Record<string, any>) {
+  const j = proxyJobs.get(String(args.jobId));
+  if (!j) return { success: false, error: `no proxy job ${args.jobId} in this session` };
+  const t0 = Date.now();
+  while (j.state === 'running' && Date.now() - t0 < (args.waitSeconds ?? 0) * 1000) await new Promise((r) => setTimeout(r, 1000));
+  return {
+    success: j.state !== 'failed', tool: 'proxy_status', jobId: j.id, state: j.state, current: j.current,
+    progress: `${j.done.length + j.failed.length}/${j.files.length}`, done: j.done.map((d) => ({ file: basename(d.file), proxy: d.proxy, reused: d.reused, seconds: d.seconds })),
+    failed: j.failed, attached: j.attached, elapsedSec: Math.round((Date.now() - j.started) / 1000),
+    ...(j.state === 'running' ? { next: `proxy_status { jobId: "${j.id}", waitSeconds: 60 }` } : {})
+  };
 }
