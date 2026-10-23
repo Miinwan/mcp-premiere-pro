@@ -9,6 +9,7 @@ import type { MCPTool } from './index.js';
 import { encodeRgbaPng } from './expanded.js';
 import { exportJob, ffmpegPath, PRESETS as DELIVERABLES, startExportJob, waitJob } from './deliverables.js';
 import { beatLayout, detectBeats } from './beats.js';
+import { humanSize, moveToTrash, planCleanup, writeReport, withSizes, type CleanupReport, type ProjectMediaItem } from './cleanup.js';
 
 /**
  * Studio tools (Minwan): rough cut from slate cues and shot descriptions via
@@ -44,7 +45,9 @@ export const studioToolNames = [
   'select_best_takes',
   'place_voiceover',
   'normalize_loudness',
-  'review_cut'
+  'review_cut',
+  'review_unused_media',
+  'clean_unused_media'
 ] as const;
 
 export function isStudioTool(name: string): boolean {
@@ -483,6 +486,25 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         contactSheet: z.boolean().optional().describe('Make the contact sheet (default true)')
       })
     }
+    ,{
+      name: 'review_unused_media',
+      description: 'After delivery: find everything the job no longer uses, without changing anything. Usage is read from the timelines (nested sequences and multicam included): project items on no timeline (video, audio, stills, mattes, captions…), and on disk the unused imported files, their proxies, and media files sitting in the source folders that were never used. Delivery/render folders (Edited, Export, Xuất file, Render, Final, Bàn giao…) and the files in use with their proxies are always kept. keepSequences: only these sequences count as the job (the others are listed for removal too). Writes a report in ~/Library/Application Support/MCP Adobe/Don dep and returns a summary for anh to check. Then clean_unused_media.',
+      inputSchema: z.object({
+        keepSequences: z.array(z.string()).optional().describe('Sequence names that make the job (default: every sequence is kept and counts as used)'),
+        scanFolders: z.boolean().optional().describe('Also list unused media files lying in the source folders (default true)'),
+        trashProxiesOfUsed: z.boolean().optional().describe('Also list proxies of the files still in use (default false: keep them for client changes)')
+      })
+    },
+    {
+      name: 'clean_unused_media',
+      description: 'Act on a review_unused_media report after anh has read it: saves a checkpoint of the project, checks usage again right now (anything used since the report is skipped), removes the unused items from the Premiere project (plus bins left empty by it) and saves, then moves the unused files to the macOS Trash with Finder (Put Back works; nothing is deleted for good — anh empties the Trash himself). confirm must be true. Needs Finder automation permission the first time.',
+      inputSchema: z.object({
+        report: z.string().describe('Report path returned by review_unused_media'),
+        removeFromProject: z.boolean().optional().describe('Remove the unused items from the project (default true)'),
+        trashFiles: z.boolean().optional().describe('Move the unused files to the Trash (default true)'),
+        confirm: z.boolean().describe('Must be true: anh has checked the report')
+      })
+    }
   ];
   return tools.filter((t) => !existingNames.has(t.name));
 }
@@ -517,6 +539,8 @@ export async function executeStudioTool(bridge: PremiereProTransport, name: stri
       case 'place_voiceover': return await placeVoiceover(bridge, args);
       case 'normalize_loudness': return await normalizeLoudness(bridge, args);
       case 'review_cut': return await reviewCut(bridge, args);
+      case 'review_unused_media': return await reviewUnused(bridge, args);
+      case 'clean_unused_media': return await cleanUnused(bridge, args);
     }
     return { success: false, error: 'unknown studio tool ' + name };
   } catch (e: any) {
@@ -1815,4 +1839,85 @@ return JSON.stringify({success:true,count:f.length});`);
     markers = mk?.count ?? 0;
   }
   return { success: true, tool: 'review_cut', sequence: r.name, ...review, markers, contactSheet: sheet };
+}
+
+// ---------------------------------------------------------------- clean-up after delivery
+
+/** JSX: every project item with whether a kept timeline uses it. */
+const USAGE_JSX = (keep: string[] | null) => `var keep=${q(keep)};var S=app.project.sequences;var byNode={};var names=[];
+for(var i=0;i<S.numSequences;i++){byNode[S[i].projectItem.nodeId]=S[i];names.push(S[i].name);}
+function has(a,v){if(!a)return true;for(var i=0;i<a.length;i++)if(a[i]==v)return true;return false;}
+if(keep){var miss=[];for(var k=0;k<keep.length;k++)if(!has(names,keep[k]))miss.push(keep[k]);if(miss.length)return JSON.stringify({success:false,error:'no sequence named: '+miss.join(', '),sequences:names});}
+var used={},seen={};
+function mark(s){if(seen[s.sequenceID])return;seen[s.sequenceID]=1;used[s.projectItem.nodeId]=1;var G=[s.videoTracks,s.audioTracks];
+ for(var g=0;g<2;g++){for(var t=0;t<G[g].numTracks;t++){var tr=G[g][t];for(var c=0;c<tr.clips.numItems;c++){var pi=tr.clips[c].projectItem;if(!pi)continue;used[pi.nodeId]=1;var ns=byNode[pi.nodeId];if(ns)mark(ns);}}}}
+for(var i=0;i<S.numSequences;i++)if(has(keep,S[i].name))mark(S[i]);
+var items=[];function walk(b){for(var i=0;i<b.children.numItems;i++){var c=b.children[i];if(c.type==2){walk(c);continue;}
+ var p=null;try{p=String(c.getMediaPath());if(!p||p=='undefined')p=null;}catch(e){}var px=null;try{if(c.hasProxy())px=String(c.getProxyPath());}catch(e2){}
+ var isSeq=!!byNode[c.nodeId];items.push({id:c.nodeId,name:c.name,path:p,proxy:px,isSequence:isSeq,used:!!used[c.nodeId]});}}
+walk(app.project.rootItem);`;
+
+async function reviewUnused(bridge: PremiereProTransport, args: Record<string, any>) {
+  const keep = args.keepSequences?.length ? args.keepSequences as string[] : null;
+  const r = await jsx(bridge, `${USAGE_JSX(keep)}return JSON.stringify({success:true,project:String(app.project.path),items:items});`, 180000);
+  if (!r?.success) return { tool: 'review_unused_media', ...r };
+  const items = r.items as ProjectMediaItem[];
+  const plan = planCleanup(items, { trashProxiesOfUsed: !!args.trashProxiesOfUsed, scanFolders: args.scanFolders !== false });
+  const trash = withSizes(plan.trash);
+  const inUse = withSizes(plan.usedFiles.map((p) => ({ path: p })));
+  const total = trash.reduce((a, b) => a + b.size, 0);
+  const { file } = writeReport({
+    app: 'premiere', project: r.project, giu: keep ?? ['(mọi sequence)'],
+    dang_dung: inUse, xoa_khoi_project: plan.removeFromProject, dua_vao_trash: trash, tong_dung_luong: total,
+    canh_bao: ['File trong thư mục nguồn có thể đang dùng ở project khác: xem danh sách trước khi dọn.']
+  });
+  return {
+    success: true, tool: 'review_unused_media', report: file,
+    project: r.project, keep: keep ?? 'every sequence',
+    inUse: inUse.length, removeFromProject: plan.removeFromProject.length, toTrash: trash.length, frees: humanSize(total),
+    biggest: [...trash].sort((a, b) => b.size - a.size).slice(0, 20).map((t) => `${humanSize(t.size)}  ${t.path}  (${t.ly_do})`),
+    projectItems: plan.removeFromProject.slice(0, 40).map((i) => `${i.name} — ${i.ly_do}`),
+    next: `Show anh the list. When he agrees: clean_unused_media { report: "${file}", confirm: true }`
+  };
+}
+
+async function cleanUnused(bridge: PremiereProTransport, args: Record<string, any>) {
+  if (!existsSync(String(args.report))) return { success: false, error: `report not found: ${args.report}` };
+  const rep = JSON.parse(readFileSync(String(args.report), 'utf8')) as CleanupReport;
+  if (rep.app !== 'premiere') return { success: false, error: 'this report is from After Effects — use project.clean_unused there' };
+  if (args.confirm !== true) return { success: false, tool: 'clean_unused_media', error: 'confirm must be true', removeFromProject: rep.xoa_khoi_project.length, toTrash: rep.dua_vao_trash.length, frees: humanSize(rep.tong_dung_luong) };
+  const keep = rep.giu[0] === '(mọi sequence)' ? null : rep.giu;
+  const now = await jsx(bridge, `${USAGE_JSX(keep)}return JSON.stringify({success:true,project:String(app.project.path),items:items});`, 180000);
+  if (!now?.success) return { tool: 'clean_unused_media', ...now };
+  if (now.project !== rep.project) return { success: false, error: `the open project is ${now.project}, the report is for ${rep.project}` };
+  const items = now.items as ProjectMediaItem[];
+  const usedNow = new Set(items.filter((i) => i.used).map((i) => i.id));
+  const fresh = planCleanup(items, { trashProxiesOfUsed: rep.dua_vao_trash.some((t) => t.ly_do.startsWith('proxy của file đang dùng')), scanFolders: false });
+  const keepFiles = new Set(fresh.usedFiles.map((p) => p.normalize('NFC')));
+  const checkpoint = await checkpointProject(bridge, { label: 'truoc khi don' });
+  if (!checkpoint.success) return { tool: 'clean_unused_media', ...checkpoint };
+  let removed: any = null;
+  const skipped: string[] = [];
+  if (args.removeFromProject !== false) {
+    const ids = rep.xoa_khoi_project.filter((i) => { if (usedNow.has(i.id)) { skipped.push(`${i.name}: đã được dùng lại`); return false; } return items.some((x) => x.id === i.id); }).map((i) => i.id);
+    removed = await jsx(bridge, `var ids=${q(ids)};var want={};for(var i=0;i<ids.length;i++)want[ids[i]]=1;var hits=[],parents=[];
+function walk(b){for(var i=0;i<b.children.numItems;i++){var c=b.children[i];if(c.type==2)walk(c);else if(want[c.nodeId]){hits.push(c);parents.push(b);}}}
+walk(app.project.rootItem);
+var trashBin=app.project.rootItem.createBin('_MCP don dep');var moved=0,errors=[];
+for(var h=0;h<hits.length;h++){try{hits[h].moveBin(trashBin);moved++;}catch(e){errors.push(hits[h].name+': '+e);}}
+var gone=false;try{trashBin.deleteBin();gone=true;}catch(e2){errors.push('deleteBin: '+e2);}
+var emptied=0;for(var k=0;k<parents.length;k++){var b=parents[k];try{if(b!==app.project.rootItem&&b.children.numItems===0){b.deleteBin();emptied++;}}catch(e3){}}
+app.project.save();
+return JSON.stringify({success:gone,removed:moved,emptyBinsRemoved:emptied,errors:errors});`, 300000);
+  }
+  let trash: any = null;
+  if (args.trashFiles !== false) {
+    const paths = rep.dua_vao_trash.map((t) => t.path).filter((p) => {
+      if (keepFiles.has(p.normalize('NFC'))) { skipped.push(`${p}: đang dùng`); return false; }
+      return true;
+    });
+    const t = await moveToTrash(paths);
+    trash = { trashed: t.trashed.length, failed: t.failed, freed: humanSize(rep.dua_vao_trash.filter((x) => t.trashed.includes(x.path)).reduce((a, b) => a + b.size, 0)) };
+  }
+  return { success: true, tool: 'clean_unused_media', checkpoint: checkpoint.checkpoint, project: removed, trash, skipped, note: 'Files are in the Trash (Put Back restores them). Empty the Trash yourself when you are sure.' };
 }

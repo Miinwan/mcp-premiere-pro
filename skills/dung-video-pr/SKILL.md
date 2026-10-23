@@ -24,3 +24,5 @@ Gọi anh, xưng em, tiếng Việt, không emoji.
 - Âm lượng: `normalize_loudness { dryRun: true }` xem trước rồi áp (thoại -16, nhạc dưới thoại -26 LUFS).
 - Trước khi gửi anh: `review_cut { targetSeconds }` rồi mở contact sheet, sửa các marker Review, sau cùng `qc_before_export`.
 
+## Dọn project sau bàn giao
+`review_unused_media` → đưa anh xem danh sách (item xoá, file vào Trash, dung lượng) → anh đồng ý mới `clean_unused_media { report, confirm: true }`. Không bao giờ tự xác nhận thay anh, không xoá vĩnh viễn. Chi tiết: pr_guide "Dọn project".
