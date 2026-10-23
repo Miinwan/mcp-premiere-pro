@@ -16,3 +16,11 @@ Gọi anh, xưng em, tiếng Việt, không emoji.
 6. **Feedback**: sửa đúng chỗ anh nói, giữ phần đã ổn; mọi thay đổi để anh chỉnh tay được (bản gốc chỉ tắt, không xoá).
 7. **Bản vuông/dọc và xuất**: `create_aspect_versions` rồi `export_deliverables { presets, client, title }` (+ `export_status`); báo file, thông số, LUFS.
 8. **Bài học**: xong job, ghi vào `Kiến thức/Khách hàng/<khách>.md` (MCP After Effects) phần khách sửa gì, cái gì được khen, để job sau dùng lại.
+
+## Nhạc, take, voiceover, âm lượng, duyệt (pha 6)
+- Chọn take: `select_best_takes { sourceFolder, sequenceName }` xếp hạng take có lý do; vẫn để anh xem bằng mắt.
+- Nhạc: `detect_beats` (marker đầu ô nhịp) → `cut_to_beats { every: 1|2|4 }` ra bản sao "(theo nhịp)", bản gốc giữ nguyên; sau đó chạy lại màu theo scene trên bản mới.
+- Voiceover: `place_voiceover { file, at }` duck nhạc đúng chỗ có giọng; cần thu giọng thì dùng skill long-tieng-voice-studio.
+- Âm lượng: `normalize_loudness { dryRun: true }` xem trước rồi áp (thoại -16, nhạc dưới thoại -26 LUFS).
+- Trước khi gửi anh: `review_cut { targetSeconds }` rồi mở contact sheet, sửa các marker Review, sau cùng `qc_before_export`.
+

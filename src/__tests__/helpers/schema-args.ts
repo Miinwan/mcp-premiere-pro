@@ -82,6 +82,11 @@ function shapedGuess(schema: Schema, key: string): unknown {
       const first = (schema.options ?? [])[0];
       return first && typeof first === 'object' ? seed(first as Schema, key) : 'x';
     }
+    case 'ZodRecord': {
+      const r = schema as { valueSchema?: Schema; valueType?: Schema; _def?: { valueType?: Schema } };
+      const value = r.valueSchema ?? r.valueType ?? r._def?.valueType;
+      return { x: value ? seed(value, key) : 'x' };
+    }
     case 'ZodEnum': {
       const members = (schema.options ?? []) as string[];
       return members.length ? members[0] : 'x';

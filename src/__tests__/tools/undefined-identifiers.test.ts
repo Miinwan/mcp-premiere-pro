@@ -34,6 +34,8 @@ const HOST_GLOBALS = new Set([
   '__findSequence', '__findClip', '__findClipInSequence', '__findProjectItem',
   '__samePath', '__ticksToSeconds', '__secondsToTicks', '__mcpStringify',
   '__mcpEscapeString', '__qeSequenceFor', '__findQeClipByDomClip',
+  // Defined by the Mako CEP panel's session engine; every call is guarded by typeof.
+  'makoPrepareAdjustmentLayer', 'makoAdjustmentLayer',
 ]);
 
 type Node = Record<string, any>;

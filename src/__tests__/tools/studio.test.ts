@@ -11,7 +11,7 @@ const take = (stt: number, file: string, n: number, vao: number, ra: number, tin
 describe('studio tools', () => {
   it('registers the four tools', () => {
     const names = getStudioTools(new Set()).map((t) => t.name);
-    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers', 'create_proxies', 'proxy_status', 'checkpoint_project', 'organize_project_bins', 'qc_before_export', 'transcribe_to_captions']);
+    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers', 'create_proxies', 'proxy_status', 'checkpoint_project', 'organize_project_bins', 'qc_before_export', 'transcribe_to_captions', 'detect_beats', 'cut_to_beats', 'select_best_takes', 'place_voiceover', 'normalize_loudness', 'review_cut']);
     expect(isStudioTool('rough_cut_by_cues')).toBe(true);
     expect(getStudioTools(new Set(['describe_sources'])).map((t) => t.name)).not.toContain('describe_sources');
   });
@@ -95,5 +95,61 @@ describe('captions', () => {
     expect(cues[0].text).toBe('Welcome to our kitchen');
     expect(cues[0].a).toBeCloseTo(100 + 2 - 1.5);
     expect(toSrt(cues)).toMatch(/^1\n00:01:40,500 --> /);
+  });
+});
+
+describe('phase 6 helpers', () => {
+  const st = require('../../tools/studio.js');
+  const bt = require('../../tools/beats.js');
+
+  it('finds 120 BPM on a synthetic click track', () => {
+    const sr = 11025, x = new Float32Array(sr * 20);
+    for (let b = 0; b < 40; b++) for (let i = 0; i < 300; i++) x[Math.round(b * 0.5 * sr) + i] = Math.sin(i * 0.6) * (1 - i / 300);
+    const r = bt.analyseSignal(x, sr);
+    expect(Math.abs(r.bpm - 120)).toBeLessThan(2);
+    expect(r.beats.length).toBeGreaterThan(35);
+  });
+
+  it('snaps cuts to the beat grid without running past the media', () => {
+    const grid = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
+    const l = bt.beatLayout([{ len: 1.2, maxLen: 10 }, { len: 0.9, maxLen: 0.95 }], grid, 0);
+    expect(l[0]).toEqual({ at: 0, len: 1, onBeat: true });
+    expect(l[1].at).toBe(1);
+    expect(l[1].len).toBeLessThanOrEqual(0.95);
+  });
+
+  it('keeps every n-th beat from the bar start', () => {
+    expect(st.beatGrid([0, 1, 2, 3, 4, 5, 6], [1, 5], 2)).toEqual([1, 3, 5]);
+  });
+
+  it('maps beats into a clip on the timeline', () => {
+    expect(st.timelineBeats({ start: 10, inS: 2, outS: 4 }, [1, 2, 3, 4])).toEqual([10, 11]);
+  });
+
+  it('prefers a clean take over one with a retake call', () => {
+    const base = { id: 'a', file: 'f', ten_file: 'f.mp4', take_trong_file: 1, vao_giay: 0, ra_giay: 5, do_tin_cay: 0.8, ca_file: false, ket_thuc_bang: 'khau_lenh_ra', khau_lenh_ra: { chu: 'corte' } };
+    const clean = st.scoreTake(base, [{ chu: 'hello', vao: 24, ra: 30, xac_suat: 0.9 }], 24);
+    const flub = st.scoreTake({ ...base, id: 'b' }, [{ chu: 'otra vez', vao: 48, ra: 60, xac_suat: 0.9 }], 24);
+    expect(clean.score).toBeGreaterThan(flub.score);
+    expect(flub.reasons.join(' ')).toMatch(/làm lại/);
+  });
+
+  it('turns silences into speaking windows', () => {
+    expect(st.speechWindows([{ a: 0, b: 0.5 }, { a: 2, b: 2.3 }, { a: 4, b: 6 }], 8)).toEqual([{ a: 0.5, b: 4 }, { a: 6, b: 8 }]);
+  });
+
+  it('classifies audio roles', () => {
+    expect(st.audioRole({ track: 0, file: '/a/cam.MP4' })).toBe('dialogue');
+    expect(st.audioRole({ track: 1, file: '/a/song.mp3' })).toBe('music');
+    expect(st.audioRole({ track: 2, file: '/a/VO take 1.wav' })).toBe('voiceover');
+  });
+
+  it('flags flash frames, jump cuts and off-beat cuts', () => {
+    const fd = 1 / 24;
+    const c = (name: string, file: string, start: number, end: number, inS: number) => ({ track: 0, file, name, start, end, inS, outS: inS + end - start, adj: false, disabled: false });
+    const r = st.reviewFindings([c('A', 'x', 0, 2, 0), c('B', 'x', 2, 2.1, 2.5), c('C', 'y', 2.1, 9, 0)], fd, { beats: [0, 2, 4] });
+    const kinds = r.findings.map((f: any) => f.kind);
+    expect(kinds).toEqual(expect.arrayContaining(['flash_frame', 'jump_cut', 'long_shot']));
+    expect(r.beats.offBeat.length).toBe(1);
   });
 });

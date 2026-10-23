@@ -7,7 +7,8 @@ import { randomUUID } from 'node:crypto';
 import type { PremiereProTransport } from '../bridge/types.js';
 import type { MCPTool } from './index.js';
 import { encodeRgbaPng } from './expanded.js';
-import { exportJob, PRESETS as DELIVERABLES, startExportJob, waitJob } from './deliverables.js';
+import { exportJob, ffmpegPath, PRESETS as DELIVERABLES, startExportJob, waitJob } from './deliverables.js';
+import { beatLayout, detectBeats } from './beats.js';
 
 /**
  * Studio tools (Minwan): rough cut from slate cues and shot descriptions via
@@ -37,7 +38,13 @@ export const studioToolNames = [
   'checkpoint_project',
   'organize_project_bins',
   'qc_before_export',
-  'transcribe_to_captions'
+  'transcribe_to_captions',
+  'detect_beats',
+  'cut_to_beats',
+  'select_best_takes',
+  'place_voiceover',
+  'normalize_loudness',
+  'review_cut'
 ] as const;
 
 export function isStudioTool(name: string): boolean {
@@ -389,6 +396,86 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         addTrack: z.boolean().optional().describe('Import the SRT and create a caption track (default true)')
       })
     }
+    ,{
+      name: 'detect_beats',
+      description: 'Find the beat of the music: tempo (BPM), every beat and the first beat of each bar. Give a file, or let it read the music already on the timeline (audio-only clips that are not named like a voiceover) and drop cyan markers "Nhịp 1" on each bar (markers: "beats" for every beat, "none" for no markers). Results are cached in <music folder>/.media. Check by ear: tempo can come out at half or double on sparse music.',
+      inputSchema: z.object({
+        ...seqRef,
+        file: z.string().optional().describe('Music file to analyse instead of the timeline'),
+        musicTrack: z.number().int().min(0).optional().describe('Audio track holding the music (default: any audio-only clip)'),
+        markers: z.enum(['downbeats', 'beats', 'none']).optional().describe('Sequence markers to add (default downbeats); old "Nhịp" markers are replaced'),
+        force: z.boolean().optional().describe('Re-analyse even if cached')
+      })
+    },
+    {
+      name: 'cut_to_beats',
+      description: 'Re-time a cut to the music: a copy of the sequence ("<name> (theo nhịp)") where every clip on the video track keeps its in point and its end moves to the nearest beat (every: 1 = each beat, 2 = every other, 4 = each bar), so all cuts land on the beat. Motion (scale/position/rotation) is carried over; music and other tracks stay. The original sequence is not changed. dryRun shows the plan first.',
+      inputSchema: z.object({
+        ...seqRef,
+        musicTrack: z.number().int().min(0).optional().describe('Audio track with the music (default: any audio-only clip)'),
+        videoTrack: z.number().int().min(0).optional().describe('Video track to re-time (default 0)'),
+        every: z.number().int().min(1).max(8).optional().describe('Cut on every n-th beat, counted from the bar start (default 1)'),
+        minShot: z.number().min(0.1).optional().describe('Shortest shot in seconds (default 0.4)'),
+        newSequenceName: z.string().optional(),
+        dryRun: z.boolean().optional()
+      })
+    },
+    {
+      name: 'select_best_takes',
+      description: 'Rank the takes of a footage folder from what the media engine heard: ended on a cut call, cue confidence, how clearly the lines were spoken, retake calls ("otra vez", "again", "lại đi"…) in or right after the take, very short takes, later takes slightly preferred. Returns the ranking with reasons per file (groupBy "file") or overall ("none"); with sequenceName it also builds a selects sequence of the best take(s) with the score on each marker. Uses the same cache as rough_cut_by_cues. Always check the picks by eye.',
+      inputSchema: z.object({
+        sourceFolder: z.string().describe('Footage folder (same as rough_cut_by_cues)'),
+        groupBy: z.enum(['file', 'none']).optional().describe('Rank inside each file (default) or across the folder'),
+        keep: z.number().int().min(1).optional().describe('Takes to keep per group (default 1)'),
+        sequenceName: z.string().optional().describe('Build a selects sequence with this name'),
+        frame: z.string().optional().describe('Frame for the selects sequence (default 1920x1080)'),
+        gapSeconds: z.number().min(0).optional(),
+        waitSeconds: z.number().optional(),
+        fast: z.boolean().optional()
+      })
+    },
+    {
+      name: 'place_voiceover',
+      description: 'Put a voiceover file on the timeline (at the playhead or at seconds) on the first free audio track and duck the music under it: Volume keyframes only where the voice actually speaks (silences longer than 0.35 s let the music back up), with short fades. Music = audio-only clips on other tracks, or the tracks in duckTracks. Keyframes stay editable in Effect Controls. To record a Vietnamese/English voice first, use the long-tieng-voice-studio skill.',
+      inputSchema: z.object({
+        ...seqRef,
+        file: z.string().describe('Voiceover audio file'),
+        at: z.number().min(0).optional().describe('Timeline seconds (default: playhead)'),
+        track: z.number().int().min(0).optional().describe('Audio track for the voice (default: first free one)'),
+        duckDb: z.number().max(0).optional().describe('Music change under the voice in dB (default -10)'),
+        fadeSeconds: z.number().min(0).optional().describe('Duck fade (default 0.25)'),
+        duckTracks: z.array(z.number().int().min(0)).optional().describe('Audio tracks to duck (default: music clips)'),
+        voGainDb: z.number().optional().describe('Voice clip level in dB'),
+        silenceDb: z.number().optional().describe('Silence threshold for the voice (default -35)')
+      })
+    },
+    {
+      name: 'normalize_loudness',
+      description: 'Even out clip loudness on the timeline: each audio clip is measured (LUFS, only the part used) and its Volume level set so dialogue and voiceover sit at target (default -16) and music sits under the voice (musicTarget, default -26; music alone goes to target). Clips with ducking keyframes keep their shape, the whole curve is shifted. Gains are capped at +15 dB. dryRun shows the measurements first. The final mix is still normalised per platform by export_deliverables.',
+      inputSchema: z.object({
+        ...seqRef,
+        tracks: z.array(z.number().int().min(0)).optional().describe('Audio tracks to touch (default all)'),
+        target: z.number().optional().describe('Dialogue/voice target LUFS (default -16)'),
+        musicTarget: z.number().optional().describe('Music under voice LUFS (default -26)'),
+        musicTracks: z.array(z.number().int().min(0)).optional().describe('Force these tracks to be treated as music'),
+        dialogueTracks: z.array(z.number().int().min(0)).optional().describe('Force these tracks to be treated as dialogue'),
+        dryRun: z.boolean().optional()
+      })
+    },
+    {
+      name: 'review_cut',
+      description: 'Look over a cut like an editor before showing it: shot count and pacing (average, shortest, longest, first shot for the hook), flash frames, shots held too long (maxShot, default 5 s), gaps, jump cuts inside the same shot, footage used twice, cuts off the music beat (when music is on the timeline), length against targetSeconds. Drops orange "Review:" markers (old ones replaced) and makes a contact sheet of one frame per shot (from proxies when present) in "<project folder>/Review/<sequence>/contact sheet.jpg".',
+      inputSchema: z.object({
+        ...seqRef,
+        videoTrack: z.number().int().min(0).optional().describe('Video track to review (default 0)'),
+        maxShot: z.number().min(0.5).optional().describe('Longest shot before it is flagged (default 5 s)'),
+        targetSeconds: z.number().optional().describe('Wanted length'),
+        musicTrack: z.number().int().min(0).optional(),
+        checkBeats: z.boolean().optional().describe('Compare cuts with the music beat (default true)'),
+        markers: z.boolean().optional().describe('Add Review markers (default true)'),
+        contactSheet: z.boolean().optional().describe('Make the contact sheet (default true)')
+      })
+    }
   ];
   return tools.filter((t) => !existingNames.has(t.name));
 }
@@ -417,6 +504,12 @@ export async function executeStudioTool(bridge: PremiereProTransport, name: stri
       case 'organize_project_bins': return await organizeBins(bridge, args);
       case 'qc_before_export': return await qcBeforeExport(bridge, args);
       case 'transcribe_to_captions': return await captions(bridge, args);
+      case 'detect_beats': return await detectBeatsTool(bridge, args);
+      case 'cut_to_beats': return await cutToBeats(bridge, args);
+      case 'select_best_takes': return await selectBestTakes(bridge, args);
+      case 'place_voiceover': return await placeVoiceover(bridge, args);
+      case 'normalize_loudness': return await normalizeLoudness(bridge, args);
+      case 'review_cut': return await reviewCut(bridge, args);
     }
     return { success: false, error: 'unknown studio tool ' + name };
   } catch (e: any) {
@@ -467,27 +560,9 @@ export function layoutTakes(takes: MediaTake[], gap = 0, low = 0.6) {
   });
 }
 
-async function roughCut(bridge: PremiereProTransport, args: Record<string, any>) {
-  const folder = String(args.sourceFolder);
-  if (!existsSync(folder)) return { success: false, error: `folder not found: ${folder}` };
-  const cli = ['take-khau-lenh', folder, '--json'];
-  if (args.model) cli.push('--model', String(args.model));
-  if (args.dropNoCue) cli.push('--bo-file-khong-lenh');
-  cli.push('--khung', String(args.frame ?? '1920x1080'));
-  const job = await runMedia(cli, (args.waitSeconds ?? 45) * 1000, args.fast !== false);
-  const problem = mediaProblem(job, 'rough_cut_by_cues');
-  if (problem) return problem;
-  const out = parseMedia(job);
-  const takes = out.take as MediaTake[];
-  if (!takes?.length) return { success: false, error: 'no takes found in this folder', detail: out };
-  const rows = layoutTakes(takes, args.gapSeconds ?? 0, args.lowConfidence ?? 0.6);
-  const summary = { files: out.so_file, takes: out.so_take, noCueFiles: (out.file_khong_co_khau_lenh ?? []).length, cache: out.file_ket_qua };
-  if (args.analyzeOnly) return { success: true, ...summary, takes: rows };
-
-  const seqName = String(args.sequenceName || `Rough cut ${basename(folder)}`);
-  const files = Array.from(new Set(rows.map((r) => r.file)));
-  const frame = out.khung ? { w: out.khung.rong, h: out.khung.cao } : null;
-  const body = `
+/** JSX: a new sequence with the takes laid end to end, a marker on each (shared by rough_cut_by_cues and select_best_takes). */
+function takesSequenceJsx(seqName: string, files: string[], rows: ReturnType<typeof layoutTakes>, frame: { w: number; h: number } | null, gap: number): string {
+  return `
 var seqName=${q(seqName)};if(__seq(seqName,null))return JSON.stringify({success:false,error:'A sequence named '+seqName+' already exists — pick another sequenceName (nothing was changed).'});
 var files=${q(files)};var rows=${q(rows)};
 var bin=__bin(seqName);
@@ -500,7 +575,7 @@ var frame=${q(frame)};var frameSet=null;
 if(frame){try{var st=seq.getSettings();st.videoFrameWidth=frame.w;st.videoFrameHeight=frame.h;seq.setSettings(st);frameSet=seq.frameSizeHorizontal+'x'+seq.frameSizeVertical;}catch(eS){frameSet='failed: '+eS;}}
 for(var v=0;v<seq.videoTracks.numTracks;v++){var vt=seq.videoTracks[v];for(var k=vt.clips.numItems-1;k>=0;k--)vt.clips[k].remove(false,false);}
 for(var a=0;a<seq.audioTracks.numTracks;a++){var at=seq.audioTracks[a];for(var k=at.clips.numItems-1;k>=0;k--)at.clips[k].remove(false,false);}
-var placed=0,errors=[];var cursor=0;var gap=${q(args.gapSeconds ?? 0)};
+var placed=0,errors=[];var cursor=0;var gap=${q(gap)};
 for(var r=0;r<rows.length;r++){var row=rows[r];var it=items[row.file];
  try{it.setInPoint(row['in'],4);it.setOutPoint(row.out,4);}catch(e1){try{it.setInPoint(row['in']);it.setOutPoint(row.out);}catch(e2){}}
  var hasVideo=true;try{hasVideo=!/\\.(wav|mp3|aif|aiff|m4a|aac|flac)$/i.test(row.file);}catch(e3){}
@@ -521,6 +596,29 @@ for(var r=0;r<rows.length;r++){var row=rows[r];var it=items[row.file];
 for(var f in items){try{items[f].clearInPoint();items[f].clearOutPoint();}catch(e7){}}
 try{app.project.openSequence(seq.sequenceID);}catch(e8){}
 return JSON.stringify({success:true,sequence:seq.name,sequenceId:seq.sequenceID,frame:frameSet,placed:placed,errors:errors});`;
+}
+
+async function roughCut(bridge: PremiereProTransport, args: Record<string, any>) {
+  const folder = String(args.sourceFolder);
+  if (!existsSync(folder)) return { success: false, error: `folder not found: ${folder}` };
+  const cli = ['take-khau-lenh', folder, '--json'];
+  if (args.model) cli.push('--model', String(args.model));
+  if (args.dropNoCue) cli.push('--bo-file-khong-lenh');
+  cli.push('--khung', String(args.frame ?? '1920x1080'));
+  const job = await runMedia(cli, (args.waitSeconds ?? 45) * 1000, args.fast !== false);
+  const problem = mediaProblem(job, 'rough_cut_by_cues');
+  if (problem) return problem;
+  const out = parseMedia(job);
+  const takes = out.take as MediaTake[];
+  if (!takes?.length) return { success: false, error: 'no takes found in this folder', detail: out };
+  const rows = layoutTakes(takes, args.gapSeconds ?? 0, args.lowConfidence ?? 0.6);
+  const summary = { files: out.so_file, takes: out.so_take, noCueFiles: (out.file_khong_co_khau_lenh ?? []).length, cache: out.file_ket_qua };
+  if (args.analyzeOnly) return { success: true, ...summary, takes: rows };
+
+  const seqName = String(args.sequenceName || `Rough cut ${basename(folder)}`);
+  const files = Array.from(new Set(rows.map((r) => r.file)));
+  const frame = out.khung ? { w: out.khung.rong, h: out.khung.cao } : null;
+  const body = takesSequenceJsx(seqName, files, rows, frame, args.gapSeconds ?? 0);
   const r = await jsx(bridge, body, 600000);
   return { tool: 'rough_cut_by_cues', ...r, ...summary, lowConfidence: rows.filter((x) => x.low).map((x) => x.name) };
 }
@@ -1217,4 +1315,466 @@ var r=null;try{r=s.createCaptionTrack(it,0);}catch(e2){return JSON.stringify({su
 return JSON.stringify({success:true,result:String(r)});`);
   }
   return { success: true, tool: 'transcribe_to_captions', srt, cues: all.length, preview: all.slice(0, 5).map((c) => c.text), missingTranscript: missing, captionTrack: track };
+}
+
+// ---------------------------------------------------------------- music beats, best takes, voiceover, loudness, review
+
+const AUDIO_EXT = /\.(wav|mp3|aif|aiff|m4a|aac|flac)$/i;
+const VO_NAME = /(^|[^a-z])(vo|voice|voiceover|narration|thoai|thoại|long tieng|lồng tiếng)([^a-z]|$)/i;
+
+const VOL = `function __level(c){var VN=['Volume','Volumen','Lautst\\u00e4rke'],LN=['Level','Nivel','Pegel','Niveau','Livello'];for(var i=0;i<c.components.numItems;i++){var k=c.components[i];var ok=false;for(var a=0;a<VN.length;a++)if(k.displayName==VN[a])ok=true;if(!ok)continue;for(var j=0;j<k.properties.numItems;j++){var p=k.properties[j];for(var b=0;b<LN.length;b++)if(p.displayName==LN[b])return p;}}return null;}
+function __toDb(v){return 20*Math.log(Math.max(v,1e-6))/Math.LN10+15;}
+function __fromDb(d){return Math.pow(10,(d-15)/20);}`;
+
+interface AudioClip { track: number; index: number; file: string | null; name: string; start: number; end: number; inS: number; outS: number }
+
+async function readAudio(bridge: PremiereProTransport, args: Record<string, any>) {
+  return jsx(bridge, `${SEQ_PICK(args)}var A=[];
+for(var t=0;t<s.audioTracks.numTracks;t++){var tr=s.audioTracks[t];for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];var p=null;try{p=String(c.projectItem.getMediaPath());}catch(e){}
+ A.push({track:t,index:i,file:p,name:c.name,start:c.start.seconds,end:c.end.seconds,inS:c.inPoint.seconds,outS:c.outPoint.seconds});}}
+return JSON.stringify({success:true,id:s.sequenceID,name:s.name,project:String(app.project.path),fd:s.getSettings().videoFrameRate.seconds,clips:A});`);
+}
+
+/** Music clips: audio-only media that does not look like a voiceover. */
+export function pickMusic(clips: AudioClip[], track?: number): AudioClip[] {
+  return clips.filter((c) => c.file && AUDIO_EXT.test(c.file) && (track === undefined || c.track === track) && !VO_NAME.test(basename(c.file)));
+}
+
+/** Beat times (source seconds) that fall inside a clip, moved to timeline seconds. Pure, for tests. */
+export function timelineBeats(clip: { start: number; inS: number; outS: number }, beats: number[]): number[] {
+  return beats.filter((b) => b >= clip.inS - 1e-3 && b < clip.outS).map((b) => Math.round((clip.start + b - clip.inS) * 1000) / 1000);
+}
+
+/** Every n-th beat, counted from the first downbeat so bars stay aligned. */
+export function beatGrid(beats: number[], downbeats: number[], every: number): number[] {
+  if (every <= 1 || !downbeats.length) return beats;
+  const i0 = Math.max(0, beats.findIndex((b) => Math.abs(b - downbeats[0]!) < 1e-3));
+  return beats.filter((_, i) => (((i - i0) % every) + every) % every === 0);
+}
+
+async function musicBeatsOnTimeline(bridge: PremiereProTransport, args: Record<string, any>) {
+  const a = await readAudio(bridge, args);
+  if (!a?.success) return { ok: false as const, error: a };
+  const music = pickMusic(a.clips, args.musicTrack);
+  const beats: number[] = [], downs: number[] = [];
+  const files: { file: string; bpm: number; cached: boolean }[] = [];
+  for (const c of music) {
+    const r = await detectBeats(c.file!, !!args.force);
+    if (!files.some((f) => f.file === c.file)) files.push({ file: c.file!, bpm: r.bpm, cached: r.cached });
+    beats.push(...timelineBeats(c, r.beats));
+    downs.push(...timelineBeats(c, r.downbeats));
+  }
+  const uniq = (v: number[]) => Array.from(new Set(v)).sort((x, y) => x - y);
+  return { ok: true as const, seq: a, music, files, beats: uniq(beats), downbeats: uniq(downs) };
+}
+
+async function detectBeatsTool(bridge: PremiereProTransport, args: Record<string, any>) {
+  if (args.file) {
+    if (!existsSync(args.file)) return { success: false, error: `file not found: ${args.file}` };
+    const r = await detectBeats(String(args.file), !!args.force);
+    return { success: true, tool: 'detect_beats', file: r.file, bpm: r.bpm, beats: r.beats.length, downbeats: r.downbeats.length, firstBeats: r.beats.slice(0, 8), cached: r.cached };
+  }
+  const m = await musicBeatsOnTimeline(bridge, args);
+  if (!m.ok) return { tool: 'detect_beats', ...m.error };
+  if (!m.music.length) return { success: false, tool: 'detect_beats', error: 'no music clip on the timeline', hint: 'put the track on an audio track (audio-only file), pass musicTrack, or pass file' };
+  const mode = args.markers ?? 'downbeats';
+  let markers = 0;
+  if (mode !== 'none') {
+    const times = mode === 'beats' ? m.beats : m.downbeats;
+    const r = await jsx(bridge, `var s=__seq(null,${q(m.seq.id)});var times=${q(times)};var bpm=${q(m.files.map((f) => f.bpm).join(' / '))};
+var mk=s.markers.getFirstMarker();var old=[];while(mk){if(String(mk.name).indexOf('Nhịp')===0)old.push(mk);mk=s.markers.getNextMarker(mk);}
+for(var i=0;i<old.length;i++){try{s.markers.deleteMarker(old[i]);}catch(e){}}
+var vEnd=0;for(var v=0;v<s.videoTracks.numTracks;v++){var vt=s.videoTracks[v];for(var c=0;c<vt.clips.numItems;c++)if(vt.clips[c].end.seconds>vEnd)vEnd=vt.clips[c].end.seconds;}
+var kept=[];for(var j0=0;j0<times.length;j0++)if(!vEnd||times[j0]<=vEnd+0.01)kept.push(times[j0]);times=kept;
+for(var j=0;j<times.length;j++){var m=s.markers.createMarker(times[j]);m.name=${q(mode === 'beats' ? 'Nhịp' : 'Nhịp 1')};m.comments=bpm+' BPM';try{m.setColorByIndex(7);}catch(e){}}
+return JSON.stringify({success:true,count:times.length});`, 300000);
+    markers = r?.count ?? 0;
+  }
+  return { success: true, tool: 'detect_beats', sequence: m.seq.name, music: m.files, beats: m.beats.length, downbeats: m.downbeats.length, markers, firstBeats: m.beats.slice(0, 8) };
+}
+
+function mediaDuration(file: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const p = spawn(ffmpegPath(), ['-hide_banner', '-i', file]);
+    let err = '';
+    p.stderr.on('data', (d: Buffer) => (err += d.toString()));
+    p.on('error', () => resolve(null));
+    p.on('close', () => {
+      const m = /Duration:\s*(\d+):(\d+):([\d.]+)/.exec(err);
+      resolve(m ? +m[1]! * 3600 + +m[2]! * 60 + +m[3]! : null);
+    });
+  });
+}
+
+async function cutToBeats(bridge: PremiereProTransport, args: Record<string, any>) {
+  const m = await musicBeatsOnTimeline(bridge, args);
+  if (!m.ok) return { tool: 'cut_to_beats', ...m.error };
+  if (!m.beats.length) return { success: false, tool: 'cut_to_beats', error: 'no music (or no beats) on the timeline', hint: 'place the music on an audio track first, or pass musicTrack' };
+  // Cuts can only fall on frames: snap the grid first so the clips meet exactly.
+  const fd = m.seq.fd as number;
+  const grid = Array.from(new Set(beatGrid(m.beats, m.downbeats, args.every ?? 1).map((g) => Math.round(Math.round(g / fd) * fd * 1e6) / 1e6)));
+  const vt = args.videoTrack ?? 0;
+  const v = await jsx(bridge, `var s=__seq(null,${q(m.seq.id)});${FIND_ADJ}var tr=s.videoTracks[${vt}];if(!tr)return JSON.stringify({success:false,error:'no video track ${vt + 1}'});var V=[];
+for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];if(__isAdj(c))continue;var p=null;try{p=String(c.projectItem.getMediaPath());}catch(e){}V.push({file:p,name:c.name,start:c.start.seconds,end:c.end.seconds,inS:c.inPoint.seconds,outS:c.outPoint.seconds});}
+return JSON.stringify({success:true,clips:V});`);
+  if (!v?.success) return { tool: 'cut_to_beats', ...v };
+  const clips = (v.clips as { file: string; name: string; start: number; end: number; inS: number; outS: number }[]).sort((x, y) => x.start - y.start);
+  if (!clips.length) return { success: false, tool: 'cut_to_beats', error: `V${vt + 1} has no clips` };
+  const durs = new Map<string, number | null>();
+  for (const c of clips) if (!durs.has(c.file)) durs.set(c.file, await mediaDuration(c.file));
+  const layout = beatLayout(clips.map((c) => ({ len: c.end - c.start, maxLen: (durs.get(c.file) ?? c.outS) - c.inS })), grid, clips[0]!.start, args.minShot ?? 0.4);
+  const plan = clips.map((c, i) => ({ file: c.file, name: c.name, inS: c.inS, outS: Math.round((c.inS + layout[i]!.len) * 1000) / 1000, at: layout[i]!.at, onBeat: layout[i]!.onBeat, was: Math.round((c.end - c.start) * 1000) / 1000 }));
+  if (args.dryRun) return { success: true, tool: 'cut_to_beats', bpm: m.files.map((f) => f.bpm), plan };
+  const newName = String(args.newSequenceName || `${m.seq.name} (theo nhịp)`);
+  const r = await jsx(bridge, `var base=__seq(null,${q(m.seq.id)});${FIND_ADJ}var newName=${q(newName)};
+if(__seq(newName,null))return JSON.stringify({success:false,error:'A sequence named '+newName+' already exists — pick another newSequenceName (nothing was changed).'});
+var before={};var sq=app.project.sequences;for(var i=0;i<sq.numSequences;i++)before[sq[i].sequenceID]=true;
+base.clone();var s=null;sq=app.project.sequences;for(var i=0;i<sq.numSequences;i++)if(!before[sq[i].sequenceID])s=sq[i];
+if(!s)return JSON.stringify({success:false,error:'clone failed'});s.name=newName;
+var tr=s.videoTracks[${vt}];var plan=${q(plan)};var keep=[];var ids={};var spans=[];
+for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];if(__isAdj(c))continue;var M=__comp(c,'Motion');var mv={};
+ var names=['Scale','Position','Rotation','Anchor Point'];for(var n=0;n<names.length;n++){var pp=__prop(M,names[n]);try{if(pp&&!pp.isTimeVarying())mv[names[n]]=pp.getValue();}catch(e){}}
+ keep.push({it:c.projectItem,motion:mv});ids[c.projectItem.nodeId]=true;spans.push([c.start.seconds,c.end.seconds]);}
+for(var i=tr.clips.numItems-1;i>=0;i--){if(!__isAdj(tr.clips[i]))tr.clips[i].remove(false,false);}
+for(var a=0;a<s.audioTracks.numTracks;a++){var at=s.audioTracks[a];for(var k=at.clips.numItems-1;k>=0;k--){var ac=at.clips[k];var hit=false;try{hit=ids[ac.projectItem.nodeId];}catch(e){}
+ if(!hit)continue;for(var z=0;z<spans.length;z++){if(ac.start.seconds<spans[z][1]-0.01&&ac.end.seconds>spans[z][0]+0.01){ac.remove(false,false);break;}}}}
+var placed=0,errors=[];
+var cursor=null;
+for(var r=0;r<plan.length&&r<keep.length;r++){var row=plan[r];var it=keep[r].it;
+ // place at the real end of the previous clip, end on the planned beat
+ var at=cursor===null?row.at:cursor;var out=row.outS-(at-row.at);
+ try{it.setInPoint(row.inS,4);it.setOutPoint(out,4);}catch(e1){}
+ tr.overwriteClip(it,at);var got=null;
+ for(var c2=0;c2<tr.clips.numItems;c2++){var cl=tr.clips[c2];if(Math.abs(cl.start.seconds-at)<0.05&&cl.projectItem.nodeId==it.nodeId){got=cl;break;}}
+ if(!got){errors.push(row.name+': not placed');continue;}
+ try{got.name=row.name;}catch(e2){}
+ var M2=__comp(got,'Motion');for(var key in keep[r].motion){var p2=__prop(M2,key);try{if(p2)p2.setValue(keep[r].motion[key],true);}catch(e3){errors.push(row.name+': '+key);}}
+ placed++;cursor=got.end.seconds;try{it.clearInPoint();it.clearOutPoint();}catch(e4){}}
+try{app.project.openSequence(s.sequenceID);}catch(e5){}
+return JSON.stringify({success:true,sequence:s.name,sequenceId:s.sequenceID,placed:placed,errors:errors});`, 600000);
+  return {
+    tool: 'cut_to_beats', ...r, bpm: m.files.map((f) => f.bpm), every: args.every ?? 1,
+    onBeat: plan.filter((p) => p.onBeat).length, clips: plan.length,
+    changes: plan.map((p) => `${p.name}: ${p.was}s → ${Math.round((p.outS - p.inS) * 1000) / 1000}s @ ${p.at}s`),
+    note: 'The original sequence is untouched. Colour layers on upper tracks still follow the old cuts: run add_scene_color_layers / sync_color_layers on the new sequence.'
+  };
+}
+
+// ---- best takes
+
+const FLUB = /\b(otra vez|de nuevo|una vez m[aá]s|again|one more|sorry|perd[oó]n|esp[eé]ra(me)?|wait|hold on|l[aạ]i đi|lần nữa|xin lỗi|khoan|quay lại)\b/i;
+
+export interface ScoredTake { id: string; score: number; reasons: string[] }
+
+/** Score a take from what the media engine heard. Higher is better; reasons say why. Pure, for tests. */
+export function scoreTake(t: MediaTake & { khau_lenh_ra?: { loai?: string; chu?: string } | null; ket_thuc_bang?: string }, words: { chu: string; vao: number; ra: number; xac_suat?: number }[], fps: number): ScoredTake {
+  let score = 50;
+  const reasons: string[] = [];
+  if (t.ca_file) { score -= 20; reasons.push('không nghe thấy khẩu lệnh, lấy cả file'); }
+  if (t.ket_thuc_bang === 'khau_lenh_ra') { score += 15; reasons.push(`kết thúc bằng "${t.khau_lenh_ra?.chu ?? 'cắt'}"`); }
+  else if (!t.ca_file) { score -= 5; reasons.push('không có lệnh cắt, có thể bị ngắt'); }
+  score += Math.round((t.do_tin_cay ?? 0) * 10);
+  const len = t.ra_giay - t.vao_giay;
+  if (len < 1.5) { score -= 20; reasons.push(`quá ngắn (${len.toFixed(1)} s)`); }
+  const inside = words.filter((w) => w.vao / fps >= t.vao_giay - 0.2 && w.ra / fps <= t.ra_giay + 0.2);
+  const after = words.filter((w) => w.vao / fps > t.ra_giay && w.vao / fps <= t.ra_giay + 3);
+  const conf = inside.filter((w) => typeof w.xac_suat === 'number').map((w) => w.xac_suat!);
+  if (conf.length >= 3) {
+    const mean = conf.reduce((a, b) => a + b, 0) / conf.length;
+    score += Math.max(-10, Math.min(10, Math.round((mean - 0.6) * 40)));
+    if (mean < 0.5) reasons.push('thoại nghe không rõ');
+  }
+  const text = inside.concat(after).map((w) => w.chu).join(' ');
+  const flubs = text.match(new RegExp(FLUB.source, 'gi')) ?? [];
+  if (flubs.length) { score -= Math.min(30, 15 * flubs.length); reasons.push(`có tiếng gọi làm lại: "${flubs.slice(0, 2).join('", "')}"`); }
+  const later = Math.min(9, 3 * ((t.take_trong_file ?? 1) - 1));
+  if (later) { score += later; reasons.push('take sau (diễn viên đã vào nhịp)'); }
+  return { id: t.id, score: Math.max(0, Math.min(100, score)), reasons };
+}
+
+async function selectBestTakes(bridge: PremiereProTransport, args: Record<string, any>) {
+  const folder = String(args.sourceFolder);
+  if (!existsSync(folder)) return { success: false, error: `folder not found: ${folder}` };
+  const job = await runMedia(['take-khau-lenh', folder, '--json', '--khung', String(args.frame ?? '1920x1080')], (args.waitSeconds ?? 45) * 1000, args.fast !== false);
+  const problem = mediaProblem(job, 'select_best_takes');
+  if (problem) return problem;
+  const out = parseMedia(job);
+  const takes = (out.take ?? []) as any[];
+  if (!takes.length) return { success: false, tool: 'select_best_takes', error: 'no takes found in this folder' };
+  const scored = takes.map((t) => {
+    const pf = join(folder, '.media', 'phan_tich', `${t.media_id}.json`);
+    let words: any[] = [];
+    let fps = t.fps ? t.fps.tu / t.fps.mau : 25;
+    if (existsSync(pf)) {
+      const j = JSON.parse(readFileSync(pf, 'utf8'));
+      fps = j.fps.tu / j.fps.mau;
+      words = (j.transcript?.cau ?? []).flatMap((c: any) => c.tu ?? []);
+    }
+    return { take: t, ...scoreTake(t, words, fps) };
+  });
+  const groupBy = args.groupBy ?? 'file';
+  const groups = new Map<string, typeof scored>();
+  for (const s of scored) {
+    const k = groupBy === 'none' ? 'all' : s.take.file;
+    groups.set(k, [...(groups.get(k) ?? []), s]);
+  }
+  const keep = args.keep ?? 1;
+  const picked: typeof scored = [];
+  const report = [...groups.entries()].map(([k, list]) => {
+    const ranked = [...list].sort((a, b) => b.score - a.score);
+    picked.push(...ranked.slice(0, keep));
+    return { group: groupBy === 'none' ? 'all' : basename(k), ranking: ranked.map((r) => ({ take: `${r.take.ten_file.replace(/\.[^.]+$/, '')} T${r.take.take_trong_file}`, id: r.id, score: r.score, why: r.reasons })) };
+  });
+  let sequence: any = null;
+  if (args.sequenceName) {
+    const rows = layoutTakes(picked.map((p) => p.take) as MediaTake[], args.gapSeconds ?? 0, 0).map((r) => {
+      const p = picked.find((x) => x.id === r.id)!;
+      return { ...r, marker: `${r.marker} · điểm ${p.score} · ${p.reasons.join('; ')}` };
+    });
+    const files = Array.from(new Set(rows.map((r) => r.file)));
+    const frame = out.khung ? { w: out.khung.rong, h: out.khung.cao } : null;
+    sequence = await jsx(bridge, takesSequenceJsx(String(args.sequenceName), files, rows, frame, args.gapSeconds ?? 0), 600000);
+  }
+  return { success: true, tool: 'select_best_takes', takes: takes.length, picked: picked.map((p) => p.id), groups: report, sequence, note: 'Scores come from what was heard (cues, clarity, retake calls); always check the picks by eye.' };
+}
+
+// ---- voiceover
+
+/** Speaking windows of a voiceover from ffmpeg silencedetect output. Pure, for tests. */
+export function speechWindows(silences: { a: number; b: number }[], duration: number, mergeGap = 0.8, minLen = 0.15): { a: number; b: number }[] {
+  const sorted = [...silences].sort((x, y) => x.a - y.a);
+  const speech: { a: number; b: number }[] = [];
+  let cur = 0;
+  for (const s of sorted) {
+    if (s.a > cur + 1e-3) speech.push({ a: cur, b: s.a });
+    cur = Math.max(cur, s.b);
+  }
+  if (duration > cur + 1e-3) speech.push({ a: cur, b: duration });
+  const merged: { a: number; b: number }[] = [];
+  for (const w of speech.filter((w) => w.b - w.a >= minLen)) {
+    const last = merged[merged.length - 1];
+    if (last && w.a - last.b < mergeGap) last.b = w.b;
+    else merged.push({ ...w });
+  }
+  return merged.map((w) => ({ a: Math.round(w.a * 1000) / 1000, b: Math.round(w.b * 1000) / 1000 }));
+}
+
+function detectSilences(file: string, noiseDb = -35, minSilence = 0.35): Promise<{ silences: { a: number; b: number }[]; duration: number | null }> {
+  return new Promise((resolve) => {
+    const p = spawn(ffmpegPath(), ['-hide_banner', '-nostats', '-i', file, '-vn', '-af', `silencedetect=noise=${noiseDb}dB:d=${minSilence}`, '-f', 'null', '-']);
+    let err = '';
+    p.stderr.on('data', (d: Buffer) => (err += d.toString()));
+    p.on('error', () => resolve({ silences: [], duration: null }));
+    p.on('close', () => {
+      const dm = /Duration:\s*(\d+):(\d+):([\d.]+)/.exec(err);
+      const duration = dm ? +dm[1]! * 3600 + +dm[2]! * 60 + +dm[3]! : null;
+      const silences: { a: number; b: number }[] = [];
+      let open: number | null = null;
+      for (const line of err.split('\n')) {
+        const s = /silence_start:\s*(-?[\d.]+)/.exec(line);
+        const e = /silence_end:\s*([\d.]+)/.exec(line);
+        if (s) open = Math.max(0, +s[1]!);
+        if (e && open !== null) { silences.push({ a: open, b: +e[1]! }); open = null; }
+      }
+      if (open !== null && duration) silences.push({ a: open, b: duration });
+      resolve({ silences, duration });
+    });
+  });
+}
+
+async function placeVoiceover(bridge: PremiereProTransport, args: Record<string, any>) {
+  const file = String(args.file);
+  if (!existsSync(file)) return { success: false, error: `file not found: ${file}` };
+  const { silences, duration } = await detectSilences(file, args.silenceDb ?? -35);
+  if (!duration) return { success: false, error: 'could not read the voiceover length' };
+  const windows = speechWindows(silences, duration);
+  const r = await jsx(bridge, `${SEQ_PICK(args)}${VOL}var path=${q(file)};var dur=${duration};var win=${q(windows)};var fade=${args.fadeSeconds ?? 0.25};var duck=${args.duckDb ?? -10};
+var it=__byPath(path);if(!it){app.project.importFiles([path],true,__bin('Voiceover'),false);it=__byPath(path);}if(!it)return JSON.stringify({success:false,error:'import failed'});
+try{it.clearInPoint();it.clearOutPoint();}catch(e){}
+var at=${args.at === undefined ? 's.getPlayerPosition().seconds' : Number(args.at)};
+function free(tr){for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];if(c.start.seconds<at+dur-0.01&&c.end.seconds>at+0.01)return false;}return true;}
+var ti=${args.track === undefined ? -1 : Number(args.track)};if(ti<0){for(var t=0;t<s.audioTracks.numTracks;t++)if(free(s.audioTracks[t])){var used=s.audioTracks[t].clips.numItems>0;if(!used||ti<0){ti=t;if(!used)break;}}}
+if(ti<0||!s.audioTracks[ti])return JSON.stringify({success:false,error:'no free audio track for '+dur.toFixed(1)+' s at '+at.toFixed(2)+' s',hint:'add an audio track (add_track) or pass track'});
+var tr=s.audioTracks[ti];tr.overwriteClip(it,at);var vo=null;for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];if(Math.abs(c.start.seconds-at)<0.05){vo=c;break;}}
+if(!vo)return JSON.stringify({success:false,error:'voiceover not placed'});
+var gain=${args.voGainDb === undefined ? 'null' : Number(args.voGainDb)};if(gain!==null){var lv=__level(vo);if(lv)lv.setValue(__fromDb(gain),true);}
+function st(c,x){return c.inPoint.seconds+(Math.max(c.start.seconds,Math.min(c.end.seconds,x))-c.start.seconds);}
+var duckTracks=${q(args.duckTracks ?? null)};var ducked=[];var musicRe=/\\.(wav|mp3|aif|aiff|m4a|aac|flac)$/i;
+for(var t=0;t<s.audioTracks.numTracks;t++){if(t==ti)continue;var tt=s.audioTracks[t];
+ for(var i=0;i<tt.clips.numItems;i++){var c=tt.clips[i];var p='';try{p=String(c.projectItem.getMediaPath());}catch(e){}
+  var want=duckTracks?(function(){for(var d=0;d<duckTracks.length;d++)if(duckTracks[d]==t)return true;return false;})():musicRe.test(p);if(!want)continue;
+  var lv=__level(c);if(!lv)continue;var keys=0;
+  for(var w=0;w<win.length;w++){var a=at+win[w].a,b=at+win[w].b;if(b<=c.start.seconds||a>=c.end.seconds)continue;
+   var base=lv.isTimeVarying()?__toDb(lv.getValueAtTime(st(c,a-fade))):__toDb(lv.getValue());
+   if(!lv.isTimeVarying())lv.setTimeVarying(true);
+   var pts=[[a-fade,base],[a,base+duck],[b,base+duck],[b+fade,base]];
+   for(var k=0;k<pts.length;k++){var tt2=st(c,pts[k][0]);lv.addKey(tt2);lv.setValueAtKey(tt2,__fromDb(pts[k][1]),true);keys++;}}
+  if(keys)ducked.push('A'+(t+1)+' '+c.name+' ('+keys+' keys)');}}
+return JSON.stringify({success:true,track:'A'+(ti+1),at:at,duration:dur,ducked:ducked});`, 180000);
+  return { tool: 'place_voiceover', ...r, speech: windows.length, windows: windows.slice(0, 12), hint: r?.success && !r.ducked?.length ? 'no music clip under the voiceover to duck (pass duckTracks to pick tracks)' : undefined };
+}
+
+// ---- loudness
+
+function measureRange(file: string, from: number, length: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    const p = spawn(ffmpegPath(), ['-hide_banner', '-nostats', '-ss', String(Math.max(0, from)), '-t', String(Math.max(0.1, length)), '-i', file, '-vn', '-af', 'loudnorm=I=-16:TP=-1:LRA=11:print_format=json', '-f', 'null', '-']);
+    let err = '';
+    p.stderr.on('data', (d: Buffer) => (err += d.toString()));
+    p.on('error', () => resolve(null));
+    p.on('close', () => {
+      const j = /\{[^{}]*"input_i"[^{}]*\}/.exec(err);
+      const v = j ? Number(JSON.parse(j[0]).input_i) : NaN;
+      resolve(Number.isFinite(v) ? v : null);
+    });
+  });
+}
+
+export type AudioRole = 'dialogue' | 'voiceover' | 'music';
+
+/** Role of an audio clip: camera audio is dialogue, audio-only files are music unless named like a voiceover. Pure, for tests. */
+export function audioRole(c: { track: number; file: string | null }, musicTracks?: number[], dialogueTracks?: number[]): AudioRole {
+  if (musicTracks?.includes(c.track)) return 'music';
+  if (dialogueTracks?.includes(c.track)) return 'dialogue';
+  if (!c.file || !AUDIO_EXT.test(c.file)) return 'dialogue';
+  return VO_NAME.test(basename(c.file)) ? 'voiceover' : 'music';
+}
+
+async function normalizeLoudness(bridge: PremiereProTransport, args: Record<string, any>) {
+  const a = await readAudio(bridge, args);
+  if (!a?.success) return { tool: 'normalize_loudness', ...a };
+  const clips = (a.clips as AudioClip[]).filter((c) => c.file && (!args.tracks || args.tracks.includes(c.track)));
+  const roles = clips.map((c) => audioRole(c, args.musicTracks, args.dialogueTracks));
+  const speech = roles.some((r) => r !== 'music');
+  const target = (r: AudioRole) => (r === 'music' ? (speech ? args.musicTarget ?? -26 : args.target ?? -16) : args.target ?? -16);
+  const plan: { track: number; index: number; name: string; role: AudioRole; lufs: number | null; gainDb: number | null; capped?: boolean }[] = [];
+  for (let i = 0; i < clips.length; i++) {
+    const c = clips[i]!;
+    const lufs = await measureRange(c.file!, c.inS, c.outS - c.inS);
+    let gainDb: number | null = null, capped = false;
+    if (lufs !== null && lufs > -60) {
+      gainDb = Math.round((target(roles[i]!) - lufs) * 10) / 10;
+      if (gainDb > 15) { gainDb = 15; capped = true; }
+      if (gainDb < -30) { gainDb = -30; capped = true; }
+    }
+    plan.push({ track: c.track, index: c.index, name: c.name, role: roles[i]!, lufs: lufs === null ? null : Math.round(lufs * 10) / 10, gainDb, ...(capped ? { capped } : {}) });
+  }
+  if (args.dryRun) return { success: true, tool: 'normalize_loudness', plan };
+  const todo = plan.filter((p) => p.gainDb !== null);
+  const r = await jsx(bridge, `var s=__seq(null,${q(a.id)});${VOL}var todo=${q(todo)};var done=0,keyed=0,errors=[];
+for(var i=0;i<todo.length;i++){var p=todo[i];var c=s.audioTracks[p.track].clips[p.index];var lv=c?__level(c):null;if(!lv){errors.push(p.name+': no Volume');continue;}
+ try{if(lv.isTimeVarying()){var ks=lv.getKeys();var mx=-1e9;for(var k=0;k<ks.length;k++){var d=__toDb(lv.getValueAtKey(ks[k]));if(d>mx)mx=d;}
+   var delta=p.gainDb-mx;for(var k2=0;k2<ks.length;k2++){lv.setValueAtKey(ks[k2],__fromDb(__toDb(lv.getValueAtKey(ks[k2]))+delta),true);}keyed++;}
+  else lv.setValue(__fromDb(p.gainDb),true);done++;}catch(e){errors.push(p.name+': '+e);}}
+return JSON.stringify({success:true,set:done,keyframedClips:keyed,errors:errors});`, 180000);
+  return { tool: 'normalize_loudness', ...r, targets: { dialogue: args.target ?? -16, music: speech ? args.musicTarget ?? -26 : args.target ?? -16 }, plan, note: 'Clip levels only; export_deliverables still normalises the final mix per platform.' };
+}
+
+// ---- review
+
+interface ReviewClip { track: number; file: string | null; name: string; start: number; end: number; inS: number; outS: number; adj: boolean; disabled: boolean }
+
+/** Edit review of one video track. Pure, for tests. */
+export function reviewFindings(clips: ReviewClip[], fd: number, opts: { maxShot?: number | undefined; targetSeconds?: number | undefined; beats?: number[] | undefined } = {}) {
+  const main = clips.filter((c) => !c.adj).sort((a, b) => a.start - b.start);
+  const findings: { kind: string; at: number; detail: string }[] = [];
+  const lens = main.map((c) => c.end - c.start);
+  const maxShot = opts.maxShot ?? 5;
+  let cur = main[0]?.start ?? 0;
+  main.forEach((c, i) => {
+    const len = c.end - c.start;
+    if (c.start - cur > fd * 0.5) findings.push({ kind: 'gap', at: cur, detail: `black for ${Math.round((c.start - cur) / fd)} frame(s)` });
+    cur = Math.max(cur, c.end);
+    if (len <= fd * 3.5) findings.push({ kind: 'flash_frame', at: c.start, detail: `${c.name} is ${Math.round(len / fd)} frame(s)` });
+    if (len > maxShot) findings.push({ kind: 'long_shot', at: c.start, detail: `${c.name} holds ${len.toFixed(1)} s (over ${maxShot} s)` });
+    if (c.disabled) findings.push({ kind: 'disabled', at: c.start, detail: `${c.name} is switched off` });
+    const prev = main[i - 1];
+    if (prev && prev.file && prev.file === c.file) {
+      const skip = c.inS - prev.outS;
+      if (skip > -0.1 && skip < 2) findings.push({ kind: 'jump_cut', at: c.start, detail: `${prev.name} → ${c.name}: same shot, ${skip.toFixed(2)} s skipped` });
+    }
+  });
+  main.forEach((c, i) => {
+    for (const d of main.slice(0, i)) if (d.file && d.file === c.file && c.inS < d.outS - 0.1 && c.outS > d.inS + 0.1) {
+      findings.push({ kind: 'reused_footage', at: c.start, detail: `${c.name} reuses footage already shown at ${d.start.toFixed(1)} s` });
+      break;
+    }
+  });
+  let beatStats: { cuts: number; onBeat: number; offBeat: { at: number; offFrames: number }[] } | null = null;
+  if (opts.beats?.length) {
+    const cuts = main.slice(1).map((c) => c.start);
+    const off = cuts.map((t) => {
+      const near = opts.beats!.reduce((a, b) => (Math.abs(b - t) < Math.abs(a - t) ? b : a));
+      return { at: Math.round(t * 1000) / 1000, offFrames: Math.round((t - near) / fd) };
+    });
+    beatStats = { cuts: cuts.length, onBeat: off.filter((o) => Math.abs(o.offFrames) <= 1).length, offBeat: off.filter((o) => Math.abs(o.offFrames) > 1) };
+  }
+  const total = main.length ? Math.max(...main.map((c) => c.end)) - main[0]!.start : 0;
+  if (opts.targetSeconds && Math.abs(total - opts.targetSeconds) > 0.5) findings.push({ kind: 'length', at: 0, detail: `cut is ${total.toFixed(1)} s, target ${opts.targetSeconds} s` });
+  const avg = lens.length ? lens.reduce((a, b) => a + b, 0) / lens.length : 0;
+  return {
+    shots: main.length,
+    total: Math.round(total * 100) / 100,
+    averageShot: Math.round(avg * 100) / 100,
+    shortest: lens.length ? Math.round(Math.min(...lens) * 100) / 100 : 0,
+    longest: lens.length ? Math.round(Math.max(...lens) * 100) / 100 : 0,
+    firstShot: lens.length ? Math.round(lens[0]! * 100) / 100 : 0,
+    beats: beatStats,
+    findings
+  };
+}
+
+function runFfmpeg(args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    const p = spawn(ffmpegPath(), ['-hide_banner', '-v', 'error', '-y', ...args]);
+    p.on('error', () => resolve(false));
+    p.on('close', (code) => resolve(code === 0));
+  });
+}
+
+async function reviewCut(bridge: PremiereProTransport, args: Record<string, any>) {
+  const vt = args.videoTrack ?? 0;
+  const r = await jsx(bridge, `${SEQ_PICK(args)}${FIND_ADJ}var V=[];var fd=s.getSettings().videoFrameRate.seconds;var tr=s.videoTracks[${vt}];if(!tr)return JSON.stringify({success:false,error:'no video track ${vt + 1}'});
+for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];var p=null;try{p=String(c.projectItem.getMediaPath());}catch(e){}
+ V.push({track:${vt},file:p,name:c.name,start:c.start.seconds,end:c.end.seconds,inS:c.inPoint.seconds,outS:c.outPoint.seconds,adj:__isAdj(c),disabled:!!c.disabled});}
+return JSON.stringify({success:true,id:s.sequenceID,name:s.name,project:String(app.project.path),fd:fd,clips:V});`);
+  if (!r?.success) return { tool: 'review_cut', ...r };
+  let beats: number[] | undefined;
+  if (args.checkBeats !== false) {
+    try {
+      const m = await musicBeatsOnTimeline(bridge, { sequenceId: r.id, musicTrack: args.musicTrack });
+      if (m.ok && m.beats.length) beats = m.beats;
+    } catch { /* no music analysis */ }
+  }
+  const review = reviewFindings(r.clips, r.fd, { maxShot: args.maxShot, targetSeconds: args.targetSeconds, beats });
+  let sheet: string | null = null;
+  if (args.contactSheet !== false) {
+    const dir = join(String(r.project).replace(/[^/]+$/, ''), 'Review', String(r.name).replace(/[\\/:*?"<>|]/g, ' '));
+    mkdirSync(dir, { recursive: true });
+    const font = '/System/Library/Fonts/Supplemental/Arial Unicode.ttf';
+    const main = (r.clips as ReviewClip[]).filter((c) => !c.adj && c.file).sort((a, b) => a.start - b.start);
+    let n = 0;
+    for (const c of main) {
+      const prox = join(c.file!.replace(/[^/]+$/, ''), 'Proxies', `${basename(c.file!).replace(/\.[^.]+$/, '')}_Proxy.mov`);
+      const src = existsSync(prox) ? prox : c.file!;
+      const label = `${n + 1}  ${c.start.toFixed(1)}s  ${(c.end - c.start).toFixed(1)}s`;
+      const vf = `scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2,drawtext=fontfile='${font}':text='${label}':x=8:y=8:fontsize=15:fontcolor=white:box=1:boxcolor=black@0.55`;
+      if (await runFfmpeg(['-ss', String((c.inS + c.outS) / 2), '-i', src, '-frames:v', '1', '-vf', vf, '-q:v', '3', join(dir, `f_${String(++n).padStart(3, '0')}.jpg`)])) continue;
+      n--;
+    }
+    if (n) {
+      const cols = Math.min(6, n);
+      const out = join(dir, 'contact sheet.jpg');
+      if (await runFfmpeg(['-start_number', '1', '-i', join(dir, 'f_%03d.jpg'), '-vf', `tile=${cols}x${Math.ceil(n / cols)}:padding=4:color=black`, '-frames:v', '1', '-q:v', '3', out])) sheet = out;
+    }
+  }
+  let markers = 0;
+  if (args.markers !== false) {
+    const mk = await jsx(bridge, `var s=__seq(null,${q(r.id)});var f=${q(review.findings)};
+var m=s.markers.getFirstMarker();var old=[];while(m){if(String(m.name).indexOf('Review:')===0)old.push(m);m=s.markers.getNextMarker(m);}for(var i=0;i<old.length;i++){try{s.markers.deleteMarker(old[i]);}catch(e){}}
+for(var j=0;j<f.length;j++){var x=s.markers.createMarker(f[j].at);x.name='Review: '+f[j].kind;x.comments=f[j].detail;try{x.setColorByIndex(3);}catch(e){}}
+return JSON.stringify({success:true,count:f.length});`);
+    markers = mk?.count ?? 0;
+  }
+  return { success: true, tool: 'review_cut', sequence: r.name, ...review, markers, contactSheet: sheet };
 }
