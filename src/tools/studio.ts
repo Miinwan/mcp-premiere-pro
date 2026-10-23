@@ -36,7 +36,8 @@ export const studioToolNames = [
   'proxy_status',
   'checkpoint_project',
   'organize_project_bins',
-  'qc_before_export'
+  'qc_before_export',
+  'transcribe_to_captions'
 ] as const;
 
 export function isStudioTool(name: string): boolean {
@@ -378,6 +379,16 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
       description: 'Check a sequence before delivery and report problems with their timecode: offline media, disabled clips, gaps (black frames), 1–2 frame leftover clips, clips still pointing at proxies? (reminder to toggle proxies off), red "low confidence" markers left from the rough cut, empty tracks, audio clips muted, sequence frame vs the intended delivery. Read-only; fix with mako (quality_check fix closes gaps), or by hand.',
       inputSchema: z.object({ ...seqRef, expectFrame: z.string().optional().describe('Expected frame, e.g. "1080x1920"') })
     }
+    ,{
+      name: 'transcribe_to_captions',
+      description: 'Make captions for a cut from what the media engine already heard (word timings in <source>/.media, written by rough_cut_by_cues or describe_sources): for every clip on the source track, the words inside its in/out are placed at its timeline position, split into lines of at most maxChars, written to "<project folder>/Phụ đề/<sequence>.srt" and added as a caption track. Spoken language is whatever was heard (Vietnamese, English…); slate calls outside the takes are not included. Edit the text in Premiere\'s Text panel afterwards.',
+      inputSchema: z.object({
+        ...seqRef,
+        sourceTrack: z.number().int().min(0).optional().describe('Video track with the footage (default 0)'),
+        maxChars: z.number().int().min(10).max(80).optional().describe('Characters per caption (default 42)'),
+        addTrack: z.boolean().optional().describe('Import the SRT and create a caption track (default true)')
+      })
+    }
   ];
   return tools.filter((t) => !existingNames.has(t.name));
 }
@@ -405,6 +416,7 @@ export async function executeStudioTool(bridge: PremiereProTransport, name: stri
       case 'checkpoint_project': return await checkpointProject(bridge, args);
       case 'organize_project_bins': return await organizeBins(bridge, args);
       case 'qc_before_export': return await qcBeforeExport(bridge, args);
+      case 'transcribe_to_captions': return await captions(bridge, args);
     }
     return { success: false, error: 'unknown studio tool ' + name };
   } catch (e: any) {
@@ -1109,4 +1121,100 @@ var prox=false;try{prox=app.getEnableProxies&&app.getEnableProxies()==1;}catch(e
 return JSON.stringify({success:true,sequence:s.name,frame:frame,duration:tc(end),issueCount:issues.length,issues:issues,${'ok'}:issues.length===0});`;
   const r = await jsx(bridge, body, 120000);
   return { tool: 'qc_before_export', ...r };
+}
+
+// ---------------------------------------------------------------- captions
+
+interface Word { chu: string; vao: number; ra: number }
+interface Sentence { vao: number; ra: number; noi_dung: string; tu?: Word[] }
+
+/** Words of `sentences` (frames at fps) that fall in [inS, outS) source seconds, as timeline cues. Pure, for tests. */
+export function cuesForClip(sentences: Sentence[], fps: number, inS: number, outS: number, startS: number, maxChars = 42): { a: number; b: number; text: string }[] {
+  const words: { t0: number; t1: number; w: string }[] = [];
+  for (const c of sentences) {
+    const ws = c.tu?.length ? c.tu : [{ chu: c.noi_dung, vao: c.vao, ra: c.ra }];
+    const before = words.length;
+    for (const w of ws) {
+      const t0 = w.vao / fps, t1 = Math.max(w.ra / fps, t0 + 0.05);
+      if (t1 <= inS || t0 >= outS) continue;
+      words.push({ t0: Math.max(t0, inS), t1: Math.min(t1, outS), w: String(w.chu).trim() });
+    }
+    // sentence boundary: force a break
+    if (words.length > before) words[words.length - 1]!.w += '\u0000';
+  }
+  const cues: { a: number; b: number; text: string }[] = [];
+  let cur: typeof words = [];
+  const flush = () => {
+    if (!cur.length) return;
+    const text = cur.map((x) => x.w.replace(/\u0000/g, '')).join(' ').replace(/\s+/g, ' ').trim();
+    if (text) cues.push({ a: cur[0]!.t0 - inS + startS, b: cur[cur.length - 1]!.t1 - inS + startS, text });
+    cur = [];
+  };
+  for (const w of words) {
+    const len = cur.map((x) => x.w).join(' ').length + w.w.length + 1;
+    if (cur.length && (len > maxChars || w.t0 - cur[cur.length - 1]!.t1 > 1.2)) flush();
+    cur.push(w);
+    if (w.w.endsWith('\u0000')) flush();
+  }
+  flush();
+  return cues;
+}
+
+export function toSrt(cues: { a: number; b: number; text: string }[]): string {
+  const ts = (t: number) => {
+    const ms = Math.max(0, Math.round(t * 1000));
+    const p = (n: number, w = 2) => String(n).padStart(w, '0');
+    return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)},${p(ms % 1000, 3)}`;
+  };
+  // At least half a second on screen, but never past the next cue's start.
+  const sorted = [...cues].sort((x, y) => x.a - y.a);
+  return sorted.map((c, n) => {
+    const next = sorted[n + 1]?.a ?? Infinity;
+    return `${n + 1}\n${ts(c.a)} --> ${ts(Math.min(Math.max(c.b, c.a + 0.5), next))}\n${c.text}\n`;
+  }).join('\n');
+}
+
+async function captions(bridge: PremiereProTransport, args: Record<string, any>) {
+  const read = await jsx(bridge, `${SEQ_PICK(args)}var tr=s.videoTracks[${args.sourceTrack ?? 0}];var out=[];
+for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];if(c.disabled)continue;var p=null;try{p=String(c.projectItem.getMediaPath());}catch(e){}if(!p)continue;
+ out.push({file:p,inS:c.inPoint.seconds,outS:c.outPoint.seconds,startS:c.start.seconds});}
+return JSON.stringify({success:true,id:s.sequenceID,name:s.name,project:String(app.project.path),clips:out});`);
+  if (!read?.success) return { tool: 'transcribe_to_captions', ...read };
+  const all: { a: number; b: number; text: string }[] = [];
+  const missing: string[] = [];
+  const cache = new Map<string, { fps: number; sentences: Sentence[] } | null>();
+  for (const c of read.clips as { file: string; inS: number; outS: number; startS: number }[]) {
+    if (!cache.has(c.file)) {
+      let found: { fps: number; sentences: Sentence[] } | null = null;
+      const dir = join(c.file.replace(/[^/]+$/, ''), '.media');
+      const idx = join(dir, 'take_khau_lenh.json');
+      if (existsSync(idx)) {
+        const take = JSON.parse(readFileSync(idx, 'utf8'));
+        const hit = (take.take ?? []).concat(take.file_khong_co_khau_lenh ?? []).find((t: any) => t.file === c.file || t.ten_file === basename(c.file));
+        const pf = hit ? join(dir, 'phan_tich', `${hit.media_id}.json`) : null;
+        if (pf && existsSync(pf)) {
+          const j = JSON.parse(readFileSync(pf, 'utf8'));
+          found = { fps: j.fps.tu / j.fps.mau, sentences: j.transcript?.cau ?? [] };
+        }
+      }
+      cache.set(c.file, found);
+    }
+    const t = cache.get(c.file);
+    if (!t) { missing.push(basename(c.file)); continue; }
+    all.push(...cuesForClip(t.sentences, t.fps, c.inS, c.outS, c.startS, args.maxChars ?? 42));
+  }
+  if (!all.length) return { success: false, tool: 'transcribe_to_captions', error: 'no words found for these clips', missingTranscript: missing, hint: 'run rough_cut_by_cues (or describe_sources) on the footage folder first so the media engine has listened to it' };
+  const dir = join(String(read.project).replace(/[^/]+$/, ''), 'Phụ đề');
+  mkdirSync(dir, { recursive: true });
+  const srt = join(dir, `${String(read.name).replace(/[\\/:*?"<>|]/g, ' ')}.srt`);
+  writeFileSync(srt, toSrt(all), 'utf8');
+  let track: any = null;
+  if (args.addTrack !== false) {
+    track = await jsx(bridge, `var s=__seq(null,${q(read.id)});var path=${q(srt)};var it=__byPath(path);
+if(it){try{it.refreshMedia();}catch(e){}}else{app.project.importFiles([path],true,__bin('Phụ đề'),false);it=__byPath(path);}
+if(!it)return JSON.stringify({success:false,error:'SRT import failed'});
+var r=null;try{r=s.createCaptionTrack(it,0);}catch(e2){return JSON.stringify({success:false,error:'createCaptionTrack: '+e2});}
+return JSON.stringify({success:true,result:String(r)});`);
+  }
+  return { success: true, tool: 'transcribe_to_captions', srt, cues: all.length, preview: all.slice(0, 5).map((c) => c.text), missingTranscript: missing, captionTrack: track };
 }

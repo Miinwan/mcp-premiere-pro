@@ -5,6 +5,7 @@ All notable changes are documented here. Releases use semantic versioning.
 
 ## [Unreleased] — Minwan (23/10/2026)
 
+- `transcribe_to_captions`: phụ đề từ lời thoại media engine đã nghe (`.media`), chỉ lấy chữ trong in/out của từng clip, chia dòng theo số ký tự, ghi `Phụ đề/<sequence>.srt` và tạo caption track.
 - `export_deliverables` / `export_status`: master ProRes 422 HQ qua Adobe Media Encoder, deliverable chạy nền bằng ffmpeg với cùng bảng preset và cách đặt tên như MCP After Effects; âm lượng đo trước, mix thô được nén nhẹ rồi chuẩn hoá.
 - `checkpoint_project` (lưu bản sao .prproj có nhãn trước thay đổi lớn), `organize_project_bins` (bin 01 Footage → 06 Proxies & renders, có chạy thử), `qc_before_export` (offline, clip tắt, khoảng đen, mảnh 1–2 frame, marker đỏ, track trống/tắt tiếng, khung sai, proxy đang bật; báo theo timecode).
 - `create_proxies` / `proxy_status`: bước đầu tiên của job — ProRes Proxy 1/2 (hoặc H.264) bằng VideoToolbox, ưu tiên thấp, từng file, lưu `<source>/Proxies/<tên>_Proxy.mov`, tự gắn proxy vào clip trong project. Chạy thật 5 clip 4K: khoảng 40 giây mỗi file.

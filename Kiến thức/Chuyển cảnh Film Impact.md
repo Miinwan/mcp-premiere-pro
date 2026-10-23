@@ -14,3 +14,5 @@ Cập nhật 23/10/2026. Film Impact đã nằm sẵn trong danh sách Video Tra
 | Chữ | Typewriter, Text Animator | Chuyển cảnh mang chữ | theo độ dài chữ |
 
 Nguyên tắc: một video chỉ dùng 1–2 họ transition chính; không đặt transition lên cut đang có nhịp nhạc mạnh mà không khớp beat; job khác nhau thì đổi họ, không lặp một kiểu cho mọi job.
+
+Chọn theo tình huống (Premiere và After Effects chung một bảng): `After Effects/Kiến thức/Công thức/Chọn chuyển cảnh.md` (đọc bằng ae_guide).

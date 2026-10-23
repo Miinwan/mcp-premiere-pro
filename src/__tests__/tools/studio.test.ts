@@ -11,7 +11,7 @@ const take = (stt: number, file: string, n: number, vao: number, ra: number, tin
 describe('studio tools', () => {
   it('registers the four tools', () => {
     const names = getStudioTools(new Set()).map((t) => t.name);
-    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers', 'create_proxies', 'proxy_status', 'checkpoint_project', 'organize_project_bins', 'qc_before_export']);
+    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers', 'create_proxies', 'proxy_status', 'checkpoint_project', 'organize_project_bins', 'qc_before_export', 'transcribe_to_captions']);
     expect(isStudioTool('rough_cut_by_cues')).toBe(true);
     expect(getStudioTools(new Set(['describe_sources'])).map((t) => t.name)).not.toContain('describe_sources');
   });
@@ -82,5 +82,18 @@ describe('bins', () => {
     expect(binFor('sequence', '')).toBe('04 Sequences');
     expect(binFor('adjustment', '')).toBe('05 Adjustment');
     expect(binFor('media', '/x/Proxies/A001_Proxy.mov')).toBe('06 Proxies & renders');
+  });
+});
+
+describe('captions', () => {
+  it('keeps only words inside the take, shifted to the timeline', () => {
+    const { cuesForClip, toSrt } = require('../../tools/studio.js');
+    const s = [{ vao: 0, ra: 24, noi_dung: 'tres dos uno acción', tu: [{ chu: 'acción', vao: 20, ra: 24 }] },
+      { vao: 48, ra: 96, noi_dung: 'Welcome to our kitchen', tu: [{ chu: 'Welcome', vao: 48, ra: 60 }, { chu: 'to', vao: 60, ra: 66 }, { chu: 'our', vao: 66, ra: 72 }, { chu: 'kitchen', vao: 72, ra: 96 }] }];
+    const cues = cuesForClip(s, 24, 1.5, 10, 100);
+    expect(cues).toHaveLength(1);
+    expect(cues[0].text).toBe('Welcome to our kitchen');
+    expect(cues[0].a).toBeCloseTo(100 + 2 - 1.5);
+    expect(toSrt(cues)).toMatch(/^1\n00:01:40,500 --> /);
   });
 });
