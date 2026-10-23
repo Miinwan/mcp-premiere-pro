@@ -1,4 +1,4 @@
-import { layoutTakes, getStudioTools, isStudioTool } from '../../tools/studio.js';
+import { layoutTakes, layoutHits, getStudioTools, isStudioTool } from '../../tools/studio.js';
 
 const take = (stt: number, file: string, n: number, vao: number, ra: number, tin = 0.9, ca = false) => ({
   stt, id: `m-${file}-t0${n}`, file: `/src/${file}`, ten_file: file, take_trong_file: n,
@@ -11,7 +11,7 @@ const take = (stt: number, file: string, n: number, vao: number, ra: number, tin
 describe('studio tools', () => {
   it('registers the four tools', () => {
     const names = getStudioTools(new Set()).map((t) => t.name);
-    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers', 'create_proxies', 'proxy_status', 'checkpoint_project', 'organize_project_bins', 'qc_before_export', 'transcribe_to_captions', 'detect_beats', 'cut_to_beats', 'select_best_takes', 'place_voiceover', 'normalize_loudness', 'review_cut', 'review_unused_media', 'clean_unused_media']);
+    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'find_shots', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers', 'create_proxies', 'proxy_status', 'checkpoint_project', 'organize_project_bins', 'qc_before_export', 'transcribe_to_captions', 'detect_beats', 'cut_to_beats', 'select_best_takes', 'place_voiceover', 'normalize_loudness', 'review_cut', 'review_unused_media', 'clean_unused_media']);
     expect(isStudioTool('rough_cut_by_cues')).toBe(true);
     expect(getStudioTools(new Set(['describe_sources'])).map((t) => t.name)).not.toContain('describe_sources');
   });
@@ -33,6 +33,15 @@ describe('studio tools', () => {
     expect(row.scale).toBe(50);
     expect(row.pos).toEqual([0.5, 0.5]);
     expect(layoutTakes([take(1, 'B.mp4', 1, 0, 2)])[0].scale).toBeNull();
+  });
+
+  it('lays search hits in rank order with the query in the marker', () => {
+    const hit = (hang: number, file: string, vao: number, ra: number) => ({ hang, file: `/src/${file}`, ten_file: file, vao_giay: vao, ra_giay: ra, dinh_giay: vao + 1, diem: 0.13 });
+    const rows = layoutHits([hit(2, 'C0629.MP4', 42.5, 55.5), hit(1, 'C0638.MP4', 5.5, 12.5)], 'cô gái cầm menu');
+    expect(rows.map((r) => r.name)).toEqual(['C0638 #1', 'C0629 #2']);
+    expect(rows[1].at).toBeCloseTo(7, 3);
+    expect(rows[0].marker).toBe('Tìm: cô gái cầm menu · #1 · khớp nhất 6.5s · điểm 0.13');
+    expect(rows[0].scale).toBeNull();
   });
 
   it('flags low-confidence takes', () => {

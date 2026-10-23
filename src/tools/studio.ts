@@ -23,6 +23,7 @@ import { humanSize, insideFolder, jobFolderFor, moveToTrash, planCleanup, writeR
 export const studioToolNames = [
   'rough_cut_by_cues',
   'describe_sources',
+  'find_shots',
   'send_to_after_effects',
   'return_from_after_effects',
   'create_aspect_versions',
@@ -237,6 +238,23 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
         mode: z.enum(['fast', 'deep']).optional().describe('fast (default) or deep'),
         writeToProject: z.boolean().optional().describe('Write descriptions into the Project panel for clips already imported from this folder (default true)'),
+        waitSeconds: z.number().min(1).max(600).optional().describe('How long to wait in this call before returning "running" (default 45)')
+      })
+    },
+    {
+      name: 'find_shots',
+      description:
+        'Find shots by what is in the picture, in Vietnamese or English ("cô gái cầm menu", "cận mặt", "toàn cảnh nhà hàng", "người phục vụ áo đỏ"), through the media engine (SigLIP 2, local): every second of each clip\'s proxy is compared with the words, the best stretches come back ranked with in/out and a score. ' +
+        'Each hit becomes a marker on the source clip in the Project panel (open the clip in the Source Monitor to see it; searching the same words again replaces those markers). With placeOnTimeline, also builds a sequence "Tìm: <query>" with the hits in rank order. ' +
+        'Uses the clips anh kept in the project with their proxies, like describe_sources. The first search on a folder reads the images (about 30 s for 5 minutes of footage); later searches take a few seconds.',
+      inputSchema: z.object({
+        query: z.string().min(1).describe('What to look for, e.g. "cô gái cầm menu", "cận mặt", "wide shot of the restaurant"'),
+        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project (with their proxies); with a folder, only the project clips inside it, or the whole folder when none are imported'),
+        bin: z.string().optional().describe('Only the clips in this project bin'),
+        allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
+        top: z.number().int().min(1).max(50).optional().describe('How many hits (default 8)'),
+        markers: z.boolean().optional().describe('Put a marker for each hit on its source clip in the project (default true)'),
+        placeOnTimeline: z.boolean().optional().describe('Also build a sequence "Tìm: <query>" with the hits in rank order (default false)'),
         waitSeconds: z.number().min(1).max(600).optional().describe('How long to wait in this call before returning "running" (default 45)')
       })
     },
@@ -517,6 +535,7 @@ export async function executeStudioTool(bridge: PremiereProTransport, name: stri
     switch (name) {
       case 'rough_cut_by_cues': return await roughCut(bridge, args);
       case 'describe_sources': return await describeSources(bridge, args);
+      case 'find_shots': return await findShots(bridge, args);
       case 'send_to_after_effects': return await sendToAe(bridge, args);
       case 'return_from_after_effects': return await returnFromAe(bridge, args);
       case 'create_aspect_versions': return await aspectVersions(bridge, args);
@@ -719,6 +738,77 @@ return JSON.stringify({success:true,written:n,notImported:missing.length});`;
     written = await jsx(bridge, body, 120000);
   }
   return { success: true, tool: 'describe_sources', mode: out.che_do, model: out.model, secondsPerImage: out.giay_moi_anh, shots, project: written, warnings: out.canh_bao };
+}
+
+export interface MediaHit {
+  hang: number;
+  file: string;
+  ten_file: string;
+  vao_giay: number;
+  ra_giay: number;
+  dinh_giay: number;
+  diem: number;
+}
+
+/** Timeline rows for the hits of a search (same shape as layoutTakes, for takesSequenceJsx). Pure, for tests. */
+export function layoutHits(hits: MediaHit[], query: string) {
+  let t = 0;
+  return [...hits].sort((a, b) => a.hang - b.hang).map((h) => {
+    const row = {
+      id: `#${h.hang}`,
+      file: h.file,
+      in: h.vao_giay,
+      out: h.ra_giay,
+      at: Math.round(t * 1000) / 1000,
+      name: `${h.ten_file.replace(/\.[^.]+$/, '')} #${h.hang}`,
+      marker: `Tìm: ${query} · #${h.hang} · khớp nhất ${h.dinh_giay}s · điểm ${h.diem}`,
+      dialogue: '',
+      low: false,
+      scale: null as number | null,
+      pos: null as number[] | null
+    };
+    t += Math.max(0, h.ra_giay - h.vao_giay);
+    return row;
+  });
+}
+
+async function findShots(bridge: PremiereProTransport, args: Record<string, any>) {
+  const query = String(args.query ?? '').trim();
+  if (!query) return { success: false, tool: 'find_shots', error: 'query is empty' };
+  const src = await mediaSource(bridge, args);
+  if ('error' in src) return { success: false, tool: 'find_shots', error: src.error };
+  const cli = ['tim-shot', query, ...src.cli, '--top', String(args.top ?? 8), '--json'];
+  const job = await runMedia(cli, (args.waitSeconds ?? 45) * 1000, true);
+  const problem = mediaProblem(job, 'find_shots');
+  if (problem) {
+    if (problem.missingModel) problem.hint = 'Shot search needs SigLIP 2: run `uv run media tai-model --json` in MCP Adobe/Media (about 380 MB, ask anh first).';
+    return problem;
+  }
+  const out = parseMedia(job);
+  const hits = (out.ket_qua ?? []) as MediaHit[];
+  const result: any = {
+    success: true, tool: 'find_shots', query, searched: src.clips || null, cache: out.file_ket_qua,
+    hits: hits.map((h) => ({ rank: h.hang, file: h.file, in: h.vao_giay, out: h.ra_giay, best: h.dinh_giay, score: h.diem }))
+  };
+  if (!hits.length) return { ...result, note: 'nothing matched' };
+  if (args.markers !== false) {
+    const body = `
+var hits=${q(hits)};var tag=${q(`Tìm: ${query}`)};var n=0,notImported=[];var done={};
+for(var i=0;i<hits.length;i++){var h=hits[i];var it=__byPath(h.file);if(!it){notImported.push(h.file);continue;}
+ var ms=it.getMarkers();if(!ms){notImported.push(h.file);continue;}
+ if(!done[h.file]){var old=[];var m0=ms.getFirstMarker();while(m0){if(String(m0.name).indexOf(tag+' #')===0)old.push(m0);m0=ms.getNextMarker(m0);}
+  for(var k=0;k<old.length;k++){try{ms.deleteMarker(old[k]);}catch(eD){}}done[h.file]=true;}
+ var m=ms.createMarker(h.vao_giay);m.name=tag+' #'+h.hang;m.comments='khớp nhất '+h.dinh_giay+'s · điểm '+h.diem;
+ try{m.end=h.ra_giay;}catch(eE){}n++;}
+return JSON.stringify({success:true,markers:n,notImported:notImported});`;
+    result.project = await jsx(bridge, body, 120000);
+  }
+  if (args.placeOnTimeline) {
+    const rows = layoutHits(hits, query);
+    const files = Array.from(new Set(rows.map((r) => r.file)));
+    result.sequence = await jsx(bridge, takesSequenceJsx(`Tìm: ${query}`, files, rows, null, 0), 600000);
+  }
+  return result;
 }
 
 async function sendToAe(bridge: PremiereProTransport, args: Record<string, any>) {
