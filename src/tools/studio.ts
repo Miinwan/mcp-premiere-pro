@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { spawn } from 'node:child_process';
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { PremiereProTransport } from '../bridge/types.js';
 import type { MCPTool } from './index.js';
 import { encodeRgbaPng } from './expanded.js';
@@ -119,6 +119,7 @@ function mediaProblem(job: MediaJob, tool: string): any | null {
   }
   const out = parseMedia(job);
   if (job.code === 0 && out) return null;
+  if (out?.loi === 'thieu_proxy') return { success: false, tool, missingProxy: out.file, hint: 'Make proxies for these clips first (Premiere Create Proxies, or create_proxies), then call again; or pass allowOriginal: true to read the originals.' };
   if (job.code === 3) return { success: false, tool, needsConfirmation: true, question: out?.cau_hoi ?? out, hint: 'Ask anh Quang first: the media engine needs his OK (usually a download).' };
   if (job.code === 4) return { success: false, tool, missingModel: true, detail: out, hint: 'The deep mode model is not installed: run `uv run media cai-mo-ta --model 2b --json` in MCP Adobe/Media after anh agrees, or use mode fast.' };
   return { success: false, tool, exitCode: job.code, error: out?.thong_bao ?? out?.loi ?? 'media engine failed', stderr: job.stderrTail.slice(-6) };
@@ -208,7 +209,9 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         'One source can give many takes. Builds a NEW sequence with every take back to back, a→z by file then time, so anh reorders them himself; each take gets a sequence marker (take id, cue heard, dialogue, confidence) and low-confidence takes a red marker. Files with no cue are kept whole (unless dropNoCue). ' +
         'Analysis is cached next to the footage (.media/); a long first run returns status "running" — call again with the same arguments to pick up the result.',
       inputSchema: z.object({
-        sourceFolder: z.string().describe('Absolute path of the footage folder'),
+        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after anh filtered the junk (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
+        bin: z.string().optional().describe('Only the clips in this project bin'),
+        allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
         sequenceName: z.string().optional().describe('New sequence name (default "Rough cut <folder>")'),
         frame: z.string().optional().describe('Sequence frame: "1920x1080" (default), "9:16", "1:1", "4:5" or "<w>x<h>". The media engine fits each take (4K → 50 %, other ratios fill the frame centred on faces) and the scale/position go into Motion'),
         gapSeconds: z.number().min(0).optional().describe('Gap between takes in seconds (default 0)'),
@@ -226,7 +229,9 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         'Describe every shot (file) in a footage folder through the media engine: Vietnamese one-line description, shot size, setting, content labels, sharpness, exposure, shake, faces, a beauty score. mode "fast" needs no download; "deep" adds a local vision model (Qwen3.5 2B MLX) for natural sentences. ' +
         'With writeToProject, the description goes into each imported clip\'s Comment column and the quality numbers into Log Note, so anh can search and sort in the Project panel.',
       inputSchema: z.object({
-        sourceFolder: z.string().describe('Absolute path of the footage folder'),
+        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after anh filtered the junk (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
+        bin: z.string().optional().describe('Only the clips in this project bin'),
+        allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
         mode: z.enum(['fast', 'deep']).optional().describe('fast (default) or deep'),
         writeToProject: z.boolean().optional().describe('Write descriptions into the Project panel for clips already imported from this folder (default true)'),
         waitSeconds: z.number().min(1).max(600).optional().describe('How long to wait in this call before returning "running" (default 45)')
@@ -424,7 +429,9 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
       name: 'select_best_takes',
       description: 'Rank the takes of a footage folder from what the media engine heard: ended on a cut call, cue confidence, how clearly the lines were spoken, retake calls ("otra vez", "again", "lại đi"…) in or right after the take, very short takes, later takes slightly preferred. Returns the ranking with reasons per file (groupBy "file") or overall ("none"); with sequenceName it also builds a selects sequence of the best take(s) with the score on each marker. Uses the same cache as rough_cut_by_cues. Always check the picks by eye.',
       inputSchema: z.object({
-        sourceFolder: z.string().describe('Footage folder (same as rough_cut_by_cues)'),
+        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after anh filtered the junk (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
+        bin: z.string().optional().describe('Only the clips in this project bin'),
+        allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
         groupBy: z.enum(['file', 'none']).optional().describe('Rank inside each file (default) or across the folder'),
         keep: z.number().int().min(1).optional().describe('Takes to keep per group (default 1)'),
         sequenceName: z.string().optional().describe('Build a selects sequence with this name'),
@@ -598,10 +605,41 @@ try{app.project.openSequence(seq.sequenceID);}catch(e8){}
 return JSON.stringify({success:true,sequence:seq.name,sequenceId:seq.sequenceID,frame:frameSet,placed:placed,errors:errors});`;
 }
 
+/**
+ * What the media engine should look at: the clips anh kept in the project
+ * (after filtering the junk) with the proxies attached in Premiere, passed as a
+ * --danh-sach file; or a whole folder when nothing from it is imported.
+ */
+async function mediaSource(bridge: PremiereProTransport, args: Record<string, any>): Promise<{ cli: string[]; folder: string | null; clips: number } | { error: string }> {
+  const folder = args.sourceFolder ? String(args.sourceFolder) : null;
+  const r = await jsx(bridge, `var want=${q(folder)};var binName=${q(args.bin ?? null)};var out=[];var re=/\\.(mp4|mov|mxf|mts|m2ts|avi|mkv)$/i;var px0=/_Proxy\\.mov$/i;var skip=${q(HANDOFF_DIR.toLowerCase())};
+function inBin(b){if(!binName)return app.project.rootItem;var hit=null;__walk2(app.project.rootItem,function(c){if(!hit&&c.type==2&&c.name==binName)hit=c;});return hit;}
+function __walk2(bin,fn){for(var i=0;i<bin.children.numItems;i++){var c=bin.children[i];fn(c);if(c.type==2)__walk2(c,fn);}}
+var root=inBin();if(!root)return JSON.stringify({success:false,error:'no bin named '+binName});
+__walk2(root,function(c){if(c.type!=1)return;var p=null;try{p=String(c.getMediaPath());}catch(e){}if(!p||!re.test(p)||px0.test(p)||p.toLowerCase().indexOf(skip)===0)return;
+ if(want&&p.toLowerCase().indexOf(String(want).toLowerCase())!==0)return;var px=null;try{if(c.hasProxy())px=String(c.getProxyPath());}catch(e2){}
+ for(var k=0;k<out.length;k++)if(out[k].file==p)return;out.push({file:p,proxy:px});});
+return JSON.stringify({success:true,clips:out});`);
+  const list = (r?.success ? r.clips : []) as { file: string; proxy: string | null }[];
+  const extra = args.allowOriginal ? ['--cho-phep-goc'] : [];
+  if (list.length) {
+    const body = JSON.stringify({ clip: list });
+    const dir = join(homedir(), 'Library', 'Application Support', 'MCP Adobe', 'Danh sach clip');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${createHash('sha1').update(body).digest('hex').slice(0, 12)}.json`);
+    if (!existsSync(file)) writeFileSync(file, body, 'utf8');
+    const common = list.map((c) => c.file.replace(/[^/]+$/, '')).reduce((a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, a.lastIndexOf('/', i - 1) + 1); });
+    return { cli: ['--danh-sach', file, ...extra], folder: common.replace(/\/$/, '') || folder, clips: list.length };
+  }
+  if (folder && existsSync(folder)) return { cli: [folder, ...extra], folder, clips: 0 };
+  return { error: folder ? `folder not found: ${folder}` : (r?.success ? 'no footage in the project — import and filter the clips first, or pass sourceFolder' : String(r?.error ?? 'Premiere did not answer')) };
+}
+
 async function roughCut(bridge: PremiereProTransport, args: Record<string, any>) {
-  const folder = String(args.sourceFolder);
-  if (!existsSync(folder)) return { success: false, error: `folder not found: ${folder}` };
-  const cli = ['take-khau-lenh', folder, '--json'];
+  const src = await mediaSource(bridge, args);
+  if ('error' in src) return { success: false, tool: 'rough_cut_by_cues', error: src.error };
+  const folder = src.folder ?? 'footage';
+  const cli = ['take-khau-lenh', ...src.cli, '--json'];
   if (args.model) cli.push('--model', String(args.model));
   if (args.dropNoCue) cli.push('--bo-file-khong-lenh');
   cli.push('--khung', String(args.frame ?? '1920x1080'));
@@ -624,9 +662,9 @@ async function roughCut(bridge: PremiereProTransport, args: Record<string, any>)
 }
 
 async function describeSources(bridge: PremiereProTransport, args: Record<string, any>) {
-  const folder = String(args.sourceFolder);
-  if (!existsSync(folder)) return { success: false, error: `folder not found: ${folder}` };
-  const cli = ['mo-ta-shot', folder, '--che-do', args.mode === 'deep' ? 'ky' : 'nhanh', '--json'];
+  const src = await mediaSource(bridge, args);
+  if ('error' in src) return { success: false, tool: 'describe_sources', error: src.error };
+  const cli = ['mo-ta-shot', ...src.cli, '--che-do', args.mode === 'deep' ? 'ky' : 'nhanh', '--json'];
   const job = await runMedia(cli, (args.waitSeconds ?? 45) * 1000, true);
   const problem = mediaProblem(job, 'describe_sources');
   if (problem) return problem;
@@ -1493,16 +1531,16 @@ export function scoreTake(t: MediaTake & { khau_lenh_ra?: { loai?: string; chu?:
 }
 
 async function selectBestTakes(bridge: PremiereProTransport, args: Record<string, any>) {
-  const folder = String(args.sourceFolder);
-  if (!existsSync(folder)) return { success: false, error: `folder not found: ${folder}` };
-  const job = await runMedia(['take-khau-lenh', folder, '--json', '--khung', String(args.frame ?? '1920x1080')], (args.waitSeconds ?? 45) * 1000, args.fast !== false);
+  const src = await mediaSource(bridge, args);
+  if ('error' in src) return { success: false, tool: 'select_best_takes', error: src.error };
+  const job = await runMedia(['take-khau-lenh', ...src.cli, '--json', '--khung', String(args.frame ?? '1920x1080')], (args.waitSeconds ?? 45) * 1000, args.fast !== false);
   const problem = mediaProblem(job, 'select_best_takes');
   if (problem) return problem;
   const out = parseMedia(job);
   const takes = (out.take ?? []) as any[];
   if (!takes.length) return { success: false, tool: 'select_best_takes', error: 'no takes found in this folder' };
   const scored = takes.map((t) => {
-    const pf = join(folder, '.media', 'phan_tich', `${t.media_id}.json`);
+    const pf = join(String(out.thu_muc ?? src.folder), '.media', 'phan_tich', `${t.media_id}.json`);
     let words: any[] = [];
     let fps = t.fps ? t.fps.tu / t.fps.mau : 25;
     if (existsSync(pf)) {

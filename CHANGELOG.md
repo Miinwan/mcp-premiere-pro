@@ -5,6 +5,7 @@ All notable changes are documented here. Releases use semantic versioning.
 
 ## [Unreleased] — Minwan (23/10/2026)
 
+- Media theo quy trình anh chốt: `rough_cut_by_cues`, `describe_sources`, `select_best_takes` mặc định lấy các clip anh giữ lại trong project (sau khi lọc rác) kèm proxy đang gắn, gửi Media bằng `--danh-sach`; thiếu proxy thì báo danh sách clip, `allowOriginal` để đọc file gốc; lọc theo `bin` hoặc `sourceFolder`.
 - Pha 6: `detect_beats` (BPM, nhịp, đầu ô nhịp, marker trên timeline, cache `.media/nhip_*.json`, không cần thư viện ngoài), `cut_to_beats` (bản sao sequence, mọi điểm cắt rơi đúng nhịp, giữ Motion), `select_best_takes` (chấm điểm take theo lệnh cắt, độ rõ thoại, tiếng gọi làm lại; dựng sequence selects), `place_voiceover` (đặt VO, duck nhạc đúng chỗ có giọng bằng keyframe chỉnh tay được), `normalize_loudness` (đo LUFS từng clip, đặt level, giữ hình dạng duck), `review_cut` (nhịp dựng, flash frame, jump cut, footage lặp, cắt lệch beat, marker Review, contact sheet).
 - `transcribe_to_captions`: phụ đề từ lời thoại media engine đã nghe (`.media`), chỉ lấy chữ trong in/out của từng clip, chia dòng theo số ký tự, ghi `Phụ đề/<sequence>.srt` và tạo caption track.
 - `export_deliverables` / `export_status`: master ProRes 422 HQ qua Adobe Media Encoder, deliverable chạy nền bằng ffmpeg với cùng bảng preset và cách đặt tên như MCP After Effects; âm lượng đo trước, mix thô được nén nhẹ rồi chuẩn hoá.
