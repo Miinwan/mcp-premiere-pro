@@ -14,6 +14,8 @@ import type { PremiereProTransport } from '../bridge/types.js';
 import { Logger } from '../utils/logger.js';
 import { createMotionDemoAssets } from '../utils/demoAssets.js';
 import { executeExpandedTool, getExpandedTools, isExpandedTool } from './expanded.js';
+import { executeColorTool, getColorTools, isColorTool } from './color.js';
+import { executeStudioTool, getStudioTools, isStudioTool } from './studio.js';
 
 export interface MCPTool {
   name: string;
@@ -1411,7 +1413,9 @@ export class PremiereProTools {
     const localTools = this.getLocalTools();
     return [
       ...localTools,
-      ...getExpandedTools(new Set(localTools.map((tool) => tool.name)))
+      ...getExpandedTools(new Set(localTools.map((tool) => tool.name))),
+      ...getColorTools(new Set(localTools.map((tool) => tool.name))),
+      ...getStudioTools(new Set(localTools.map((tool) => tool.name)))
     ];
   }
 
@@ -1467,6 +1471,12 @@ export class PremiereProTools {
     this.logger.info(`Executing tool: ${name} with args:`, args);
 
     const localToolNames = new Set(this.getLocalTools().map((localTool) => localTool.name));
+    if (!localToolNames.has(name) && isStudioTool(name)) {
+      return await executeStudioTool(this.bridge, name, args);
+    }
+    if (!localToolNames.has(name) && isColorTool(name)) {
+      return await executeColorTool(this.bridge, name, args);
+    }
     if (!localToolNames.has(name) && isExpandedTool(name)) {
       return await executeExpandedTool(this.bridge, name, args);
     }
@@ -5945,7 +5955,23 @@ ${this.buildSequenceResolver(sequenceId)}
           return writtenPath(false) !== null;
         }
 
+        // exportFrame* reads its time argument as a timecode string
+        // "HH:MM:SS:FF" at the sequence rate. A bare number or ticks is taken
+        // as something else and writes the WRONG frame while reporting
+        // success (seen on 26.5 at 23.976 fps: 241 s gave a frame ~37 s
+        // earlier), so the timecode is tried first.
+        var timecode = null;
+        try {
+          var frameSeconds = sequence.getSettings().videoFrameRate.seconds;
+          var timecodeFps = Math.round(1 / frameSeconds);
+          var frameIndex = Math.round(timeNumber / frameSeconds);
+          var pad2 = function (x) { return (x < 10 ? "0" : "") + x; };
+          timecode = pad2(Math.floor(frameIndex / (timecodeFps * 3600))) + ":" + pad2(Math.floor(frameIndex / (timecodeFps * 60)) % 60) + ":" +
+            pad2(Math.floor(frameIndex / timecodeFps) % 60) + ":" + pad2(frameIndex % timecodeFps);
+        } catch (eTc) {}
+
         var exported =
+          (timecode !== null && tryExport(timecode, exportStem)) ||
           tryExport(timeNumber, exportStem) ||
           tryExport(exportStem, timeNumber) ||
           tryExport(timeString, exportStem) ||

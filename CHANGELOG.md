@@ -2,6 +2,19 @@
 
 All notable changes are documented here. Releases use semantic versioning.
 
+
+## [Unreleased] — Minwan (23/10/2026)
+
+- `rough_cut_by_cues`: gọi engine Media của MCP Adobe nghe khẩu lệnh (3-2-1, action, diễn, đi / cắt, ok) trong audio gốc, dựng sequence mới với mọi take nối tiếp a→z, marker từng take (đỏ khi độ tin cậy thấp), khung sequence và Motion scale/vị trí theo Media; đặt take theo điểm kết thúc thật nên không hở.
+- `describe_sources`: mô tả từng shot qua Media (nhanh hoặc kỹ với Qwen3.5-2B), ghi vào cột Comment và Log Note của Project panel.
+- `send_to_after_effects` / `return_from_after_effects`: cầu nối với MCP After Effects qua file handoff; bản render đặt lên track trên, bản gốc chỉ bị tắt.
+- Sửa `export_frame`: truyền timecode theo fps sequence (trước đó truyền số giây/ticks nên ra sai frame mà vẫn báo thành công).
+- `create_aspect_versions`: nhân bản ngang thành `… 1x1`, `… 9x16` (hoặc 4:5…), bố cục từng clip cắt từ chính khung ngang (Media `bo-cuc`, căn theo mặt, không lộ viền), chỉ đổi Scale/Position; adjustment layer giữ effect và phóng phủ khung mới. Đã chạy thật trên Rough cut FSI v2.
+- `add_color_layer`: layer chỉnh màu (adjustment + Lumetri) phủ sequence trên track riêng; khi project chưa có adjustment layer thì lấy từ template của Mako.
+- `mako`: gọi các thao tác của panel Mako (adjustment layer theo clip/điểm cắt, staircase, freeze frame, fit/fill khung, nest/unnest giữ effect, xoá effect, QC, xoá track trống, sequence mới, transparency grid) trên clip chọn theo track/index, khoảng thời gian hoặc tất cả.
+- `add_color_matte`: nền trắng/đen (mặc định trắng) hoặc mã màu bất kỳ đúng khung sequence, không mở hộp chọn màu của Premiere; file lưu cạnh project trong `MCP mattes` để không bị offline.
+- Panel CEP 1.1.7: tự nạp khi mở Premiere và tự Start Bridge (`autoStart: false` trong `~/.premiere-mcp-bridge/config.json` để tắt).
+
 ## [1.2.0] - 2026-08-17
 
 - Fixed `add_marker`, `update_marker`, `delete_marker`, `list_markers`, `lock_track` and

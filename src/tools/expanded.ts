@@ -257,7 +257,7 @@ function pngChunk(type: string, data: Buffer): Buffer {
   return Buffer.concat([length, typeBuffer, data, crc]);
 }
 
-function encodeRgbaPng(width: number, height: number, pixelAt: (x: number, y: number) => [number, number, number, number]): Buffer {
+export function encodeRgbaPng(width: number, height: number, pixelAt: (x: number, y: number) => [number, number, number, number]): Buffer {
   const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);

@@ -544,6 +544,9 @@
                 if (panelConfig.tempDirectory) {
                     this.tempDirectory = sanitizeTempDirectoryInput(panelConfig.tempDirectory);
                 }
+                // Minwan: the bridge starts by itself when the panel loads;
+                // set "autoStart": false in ~/.premiere-mcp-bridge/config.json to turn that off.
+                this.autoStart = panelConfig.autoStart !== false;
             }
 
             var candidatePaths = this.tempDirectory ? [this.tempDirectory, getDefaultTempPath()] : [getDefaultTempPath()];
@@ -800,5 +803,9 @@
     window.clearLog = function() { if (window.bridge) window.bridge.clearLog(); };
     document.addEventListener('DOMContentLoaded', function() {
         window.bridge = new MCPPremiereBridge();
+        // Start polling without a click (Premiere loads this panel at launch, see manifest StartOn).
+        setTimeout(function() {
+            if (window.bridge && window.bridge.autoStart !== false) window.bridge.startBridge();
+        }, 800);
     });
 })();
