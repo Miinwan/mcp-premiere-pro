@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -25,7 +25,8 @@ export const studioToolNames = [
   'create_aspect_versions',
   'add_color_layer',
   'mako',
-  'add_color_matte'
+  'add_color_matte',
+  'pr_guide'
 ] as const;
 
 export function isStudioTool(name: string): boolean {
@@ -286,6 +287,12 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         name: z.string().optional().describe('Clip name (default "Nền trắng" / "Nền đen" / "Nền #hex")')
       })
     }
+    ,{
+      name: 'pr_guide',
+      description:
+        'Premiere knowledge base (folder Premiere/Kiến thức — drop .md files there, no build): which transitions exist and when to use them (Film Impact is built into Premiere 2026), which plugins/panels MCP can drive (Mako) and which are manual (Animation/Premiere Composer), export rules. Call with no topic to list topics, then with a topic name to read it. Read it before choosing transitions or plugins.',
+      inputSchema: z.object({ topic: z.string().optional().describe('Topic (file name without .md); omit to list') })
+    }
   ];
   return tools.filter((t) => !existingNames.has(t.name));
 }
@@ -303,6 +310,7 @@ export async function executeStudioTool(bridge: PremiereProTransport, name: stri
       case 'add_color_layer': return await addColorLayer(bridge, args);
       case 'mako': return await runMako(bridge, args);
       case 'add_color_matte': return await addColorMatte(bridge, args);
+      case 'pr_guide': return prGuide(args);
     }
     return { success: false, error: 'unknown studio tool ' + name };
   } catch (e: any) {
@@ -746,4 +754,23 @@ c.end=__T(b);try{c.name=${q(name)};}catch(e){}
 return JSON.stringify({success:true,track:ti,clip:c.name,start:c.start.seconds,end:c.end.seconds,file:path,note:ti===0?null:'placed on V'+(ti+1)+' — drag it below the logo if it covers it'});`;
   const r = await jsx(bridge, body, 120000);
   return { tool: 'add_color_matte', ...r };
+}
+
+// ---------------------------------------------------------------- knowledge
+
+const GUIDE_DIR = process.env.PR_GUIDE_DIR || join(homedir(), 'Desktop', '03. Code', 'MCP Adobe', 'Premiere', 'Kiến thức');
+
+function prGuide(args: Record<string, any>) {
+  if (!existsSync(GUIDE_DIR)) return { success: false, error: `knowledge folder missing: ${GUIDE_DIR}` };
+  const files = readdirSync(GUIDE_DIR).filter((f) => f.endsWith('.md'));
+  if (!args.topic) {
+    return {
+      success: true,
+      topics: files.map((f) => ({ topic: f.replace(/\.md$/, ''), summary: (readFileSync(join(GUIDE_DIR, f), 'utf8').split('\n')[0] ?? '').replace(/^#\s*/, '') }))
+    };
+  }
+  const want = String(args.topic).toLowerCase().replace(/\.md$/, '');
+  const hit = files.find((f) => f.toLowerCase().replace(/\.md$/, '') === want) ?? files.find((f) => f.toLowerCase().includes(want));
+  if (!hit) return { success: false, error: `no topic '${args.topic}'`, topics: files.map((f) => f.replace(/\.md$/, '')) };
+  return { success: true, topic: hit.replace(/\.md$/, ''), text: readFileSync(join(GUIDE_DIR, hit), 'utf8') };
 }
