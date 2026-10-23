@@ -33,7 +33,10 @@ export const studioToolNames = [
   'add_scene_color_layers',
   'sync_color_layers',
   'create_proxies',
-  'proxy_status'
+  'proxy_status',
+  'checkpoint_project',
+  'organize_project_bins',
+  'qc_before_export'
 ] as const;
 
 export function isStudioTool(name: string): boolean {
@@ -360,6 +363,21 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
       description: 'Progress of a create_proxies job: files done, current file, attached proxies, failures.',
       inputSchema: z.object({ jobId: z.string(), waitSeconds: z.number().optional() })
     }
+    ,{
+      name: 'checkpoint_project',
+      description: 'Save the project, then copy the .prproj into "<project> checkpoints/<project> <date time> <label>.prproj" next to it. Premiere has no undo group for scripts, so take one before any large automated change (rough cut, aspect versions, colour layers); restore by opening the copy. Lists existing checkpoints with list: true.',
+      inputSchema: z.object({ label: z.string().optional().describe('Short label, e.g. "truoc lam ban doc"'), list: z.boolean().optional().describe('Only list checkpoints') })
+    },
+    {
+      name: 'organize_project_bins',
+      description: 'Tidy the Project panel the way an editor keeps it: bins "01 Footage" (video), "02 Audio" (music, VO, SFX), "03 Graphics" (images, PSD, AI, MOGRT), "04 Sequences", "05 Adjustment" (adjustment layers, mattes), "06 Proxies & renders" (AE renders, exports). Only moves items that sit loose in the root (dryRun to preview); never deletes or renames media.',
+      inputSchema: z.object({ dryRun: z.boolean().optional().describe('Only report what would move'), all: z.boolean().optional().describe('Also move items already inside other bins (default false)') })
+    },
+    {
+      name: 'qc_before_export',
+      description: 'Check a sequence before delivery and report problems with their timecode: offline media, disabled clips, gaps (black frames), 1–2 frame leftover clips, clips still pointing at proxies? (reminder to toggle proxies off), red "low confidence" markers left from the rough cut, empty tracks, audio clips muted, sequence frame vs the intended delivery. Read-only; fix with mako (quality_check fix closes gaps), or by hand.',
+      inputSchema: z.object({ ...seqRef, expectFrame: z.string().optional().describe('Expected frame, e.g. "1080x1920"') })
+    }
   ];
   return tools.filter((t) => !existingNames.has(t.name));
 }
@@ -384,6 +402,9 @@ export async function executeStudioTool(bridge: PremiereProTransport, name: stri
       case 'sync_color_layers': return await syncColorLayers(bridge, args);
       case 'create_proxies': return await createProxies(bridge, args);
       case 'proxy_status': return await proxyStatus(args);
+      case 'checkpoint_project': return await checkpointProject(bridge, args);
+      case 'organize_project_bins': return await organizeBins(bridge, args);
+      case 'qc_before_export': return await qcBeforeExport(bridge, args);
     }
     return { success: false, error: 'unknown studio tool ' + name };
   } catch (e: any) {
@@ -620,7 +641,7 @@ return JSON.stringify({success:true,placed:existing.name,track:${track},start:ex
 
 // ---------------------------------------------------------------- colour layer and aspect versions
 
-const SEQ_PICK = (args: Record<string, any>) =>
+const SEQ_PICK = (args: Record<string, any>): string =>
   `var s=(${q(args.sequenceName)}||${q(args.sequenceId)})?__seq(${q(args.sequenceName)},${q(args.sequenceId)}):app.project.activeSequence;if(!s)return JSON.stringify({success:false,error:'sequence not found'});`;
 
 /** Mako's template project holding an adjustment layer (Mako is installed as a CEP panel). */
@@ -1015,4 +1036,77 @@ async function proxyStatus(args: Record<string, any>) {
     failed: j.failed, attached: j.attached, elapsedSec: Math.round((Date.now() - j.started) / 1000),
     ...(j.state === 'running' ? { next: `proxy_status { jobId: "${j.id}", waitSeconds: 60 }` } : {})
   };
+}
+
+// ---------------------------------------------------------------- checkpoint, bins, QC
+
+async function checkpointProject(bridge: PremiereProTransport, args: Record<string, any>) {
+  const info = await jsx(bridge, `${args.list ? '' : 'app.project.save();'}return JSON.stringify({success:true,path:String(app.project.path)});`, 120000);
+  if (!info?.success || !info.path || info.path === 'undefined') return { success: false, error: 'the project has no file yet — save it once first' };
+  const proj: string = info.path;
+  const dir = join(proj.replace(/[^/]+$/, ''), basename(proj, '.prproj') + ' checkpoints');
+  const { copyFileSync, statSync } = await import('node:fs');
+  if (args.list) {
+    const items = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.prproj')).map((f) => ({ file: join(dir, f), modified: statSync(join(dir, f)).mtimeMs })).sort((a, b) => b.modified - a.modified) : [];
+    return { success: true, tool: 'checkpoint_project', checkpoints: items.map((i) => i.file) };
+  }
+  mkdirSync(dir, { recursive: true });
+  const d = new Date();
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+  const label = String(args.label ?? '').replace(/[\\/:*?"<>|]/g, ' ').trim();
+  const dest = join(dir, `${basename(proj, '.prproj')} ${stamp}${label ? ' ' + label : ''}.prproj`);
+  copyFileSync(proj, dest);
+  return { success: true, tool: 'checkpoint_project', checkpoint: dest, project: proj };
+}
+
+/** Bin for a project item by its media path / kind. Pure, for tests. */
+export function binFor(kind: 'sequence' | 'adjustment' | 'media', path: string): string {
+  if (kind === 'sequence') return '04 Sequences';
+  if (kind === 'adjustment') return '05 Adjustment';
+  const p = path.toLowerCase();
+  if (/[\\/](proxies|xuất file|xuat file|cau noi pr ae)[\\/]|_proxy\.|\.prores|ae · /.test(p) || /cau noi pr ae/.test(p)) return '06 Proxies & renders';
+  if (/mcp mattes/.test(p)) return '05 Adjustment';
+  if (/\.(wav|mp3|aif|aiff|m4a|aac|flac|ogg)$/.test(p)) return '02 Audio';
+  if (/\.(png|jpe?g|tiff?|psd|ai|eps|svg|gif|mogrt|aegraphic|pdf)$/.test(p)) return '03 Graphics';
+  return '01 Footage';
+}
+
+async function organizeBins(bridge: PremiereProTransport, args: Record<string, any>) {
+  const list = await jsx(bridge, `var out=[];function walk(b,depth){for(var i=0;i<b.children.numItems;i++){var c=b.children[i];if(c.type==2){if(${args.all === true})walk(c,depth+1);continue;}
+ var kind='media';try{if(c.isSequence&&c.isSequence())kind='sequence';}catch(e){}try{if(c.isAdjustmentLayer&&c.isAdjustmentLayer())kind='adjustment';}catch(e2){}
+ var p='';try{p=String(c.getMediaPath());}catch(e3){}out.push({id:c.nodeId,name:c.name,kind:kind,path:p,bin:b===app.project.rootItem?'':b.name});}}
+walk(app.project.rootItem,0);return JSON.stringify({success:true,items:out});`, 120000);
+  if (!list?.success) return { tool: 'organize_project_bins', ...list };
+  const moves = (list.items as any[]).map((it) => ({ ...it, to: binFor(it.kind, it.path || it.name) })).filter((it) => it.bin !== it.to);
+  if (args.dryRun || !moves.length) return { success: true, tool: 'organize_project_bins', dryRun: !!args.dryRun, moves: moves.map((m) => ({ item: m.name, to: m.to })) };
+  const r = await jsx(bridge, `var mv=${q(moves.map((m) => ({ id: m.id, to: m.to })))};var bins={};
+function bin(n){if(bins[n])return bins[n];var r=app.project.rootItem;for(var i=0;i<r.children.numItems;i++)if(r.children[i].type==2&&r.children[i].name==n){bins[n]=r.children[i];return bins[n];}bins[n]=r.createBin(n);return bins[n];}
+function find(id,b){for(var i=0;i<b.children.numItems;i++){var c=b.children[i];if(c.nodeId==id)return c;if(c.type==2){var f=find(id,c);if(f)return f;}}return null;}
+var n=0,err=[];for(var k=0;k<mv.length;k++){var it=find(mv[k].id,app.project.rootItem);if(!it)continue;try{it.moveBin(bin(mv[k].to));n++;}catch(e){err.push(it.name);}}
+return JSON.stringify({success:true,moved:n,failed:err});`, 120000);
+  return { tool: 'organize_project_bins', ...r, moves: moves.map((m) => ({ item: m.name, to: m.to })) };
+}
+
+async function qcBeforeExport(bridge: PremiereProTransport, args: Record<string, any>) {
+  const body = `${SEQ_PICK(args)}${FIND_ADJ}
+var fd=s.getSettings().videoFrameRate.seconds;var issues=[];
+function tc(t){var f=Math.round(t/fd),fps=Math.round(1/fd);function p(x){return (x<10?'0':'')+x;}return p(Math.floor(f/(fps*3600)))+':'+p(Math.floor(f/(fps*60))%60)+':'+p(Math.floor(f/fps)%60)+':'+p(f%fps);}
+var cover=[];var end=0;
+for(var t=0;t<s.videoTracks.numTracks;t++){var tr=s.videoTracks[t];
+ if(!tr.clips.numItems)issues.push({kind:'empty_track',detail:'V'+(t+1)+' is empty'});
+ for(var i=0;i<tr.clips.numItems;i++){var c=tr.clips[i];var a=c.start.seconds,b=c.end.seconds;if(b>end)end=b;
+  if(c.disabled){issues.push({kind:'disabled',at:tc(a),detail:'V'+(t+1)+' '+c.name+' is switched off'});continue;}
+  var off=false;try{off=c.projectItem&&c.projectItem.isOffline&&c.projectItem.isOffline();}catch(e){}if(off)issues.push({kind:'offline',at:tc(a),detail:c.name+' is offline'});
+  if(b-a<=fd*2.5&&!__isAdj(c))issues.push({kind:'tiny_clip',at:tc(a),detail:c.name+' is '+Math.round((b-a)/fd)+' frame(s)'});
+  if(!__isAdj(c))cover.push([a,b]);}}
+cover.sort(function(x,y){return x[0]-y[0];});var cur=0;for(var k=0;k<cover.length;k++){if(cover[k][0]-cur>fd*0.5)issues.push({kind:'gap',at:tc(cur),detail:'black for '+Math.round((cover[k][0]-cur)/fd)+' frame(s)'});if(cover[k][1]>cur)cur=cover[k][1];}
+for(var at=0;at<s.audioTracks.numTracks;at++){var atr=s.audioTracks[at];try{if(atr.isMuted&&atr.isMuted())issues.push({kind:'muted_track',detail:'A'+(at+1)+' is muted'});}catch(e){}}
+var mk=s.markers.getFirstMarker();var red=0;while(mk){try{if(mk.getColorByIndex&&mk.getColorByIndex()==1)red++;}catch(e){}mk=s.markers.getNextMarker(mk);}
+if(red)issues.push({kind:'review_markers',detail:red+' red marker(s) left (low-confidence takes or QC marks)'});
+var frame=s.frameSizeHorizontal+'x'+s.frameSizeVertical;var want=${q(args.expectFrame ?? null)};if(want&&want!==frame)issues.push({kind:'frame',detail:'sequence is '+frame+', delivery expects '+want});
+var prox=false;try{prox=app.getEnableProxies&&app.getEnableProxies()==1;}catch(e){}if(prox)issues.push({kind:'proxies_on',detail:'proxies are switched on — exports use full-res media anyway, but check the Program Monitor toggle'});
+return JSON.stringify({success:true,sequence:s.name,frame:frame,duration:tc(end),issueCount:issues.length,issues:issues,${'ok'}:issues.length===0});`;
+  const r = await jsx(bridge, body, 120000);
+  return { tool: 'qc_before_export', ...r };
 }

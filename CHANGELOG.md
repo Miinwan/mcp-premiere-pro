@@ -6,6 +6,7 @@ All notable changes are documented here. Releases use semantic versioning.
 ## [Unreleased] — Minwan (23/10/2026)
 
 - `export_deliverables` / `export_status`: master ProRes 422 HQ qua Adobe Media Encoder, deliverable chạy nền bằng ffmpeg với cùng bảng preset và cách đặt tên như MCP After Effects; âm lượng đo trước, mix thô được nén nhẹ rồi chuẩn hoá.
+- `checkpoint_project` (lưu bản sao .prproj có nhãn trước thay đổi lớn), `organize_project_bins` (bin 01 Footage → 06 Proxies & renders, có chạy thử), `qc_before_export` (offline, clip tắt, khoảng đen, mảnh 1–2 frame, marker đỏ, track trống/tắt tiếng, khung sai, proxy đang bật; báo theo timecode).
 - `create_proxies` / `proxy_status`: bước đầu tiên của job — ProRes Proxy 1/2 (hoặc H.264) bằng VideoToolbox, ưu tiên thấp, từng file, lưu `<source>/Proxies/<tên>_Proxy.mov`, tự gắn proxy vào clip trong project. Chạy thật 5 clip 4K: khoảng 40 giây mỗi file.
 - `add_scene_color_layers` / `sync_color_layers`: mỗi source một layer màu "Màu <source>" (Lumetri), cùng source ở nhiều vị trí dùng chung thông số, sync toàn bộ tham số Lumetri sau khi chấm một layer. Sửa regex có `/` trong ngoặc vuông làm ExtendScript không parse được.
 - `rough_cut_by_cues`: gọi engine Media của MCP Adobe nghe khẩu lệnh (3-2-1, action, diễn, đi / cắt, ok) trong audio gốc, dựng sequence mới với mọi take nối tiếp a→z, marker từng take (đỏ khi độ tin cậy thấp), khung sequence và Motion scale/vị trí theo Media; đặt take theo điểm kết thúc thật nên không hở.
