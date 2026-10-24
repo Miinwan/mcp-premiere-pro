@@ -20,7 +20,7 @@
 
 MCP Premiere Pro connects Claude (Desktop or Code) to a running copy of Premiere Pro through a small CEP panel. On top of ~280 low-level tools for projects, bins, sequences, clips, effects, keyframes, markers and exports, it adds a set of **studio tools** built around a real commercial editing workflow: proxies first, a rough cut assembled from the slate calls heard on set, shot search by plain words, music-driven cuts, per-scene colour, captions, aspect versions, a round trip to After Effects, and delivery exports with fixed, tested settings.
 
-Everything runs on your own Mac. Footage never leaves the machine; heavy analysis (speech, vision, beats, loudness) is done locally by a companion media engine.
+Everything runs on your own Mac. Footage never leaves the machine; heavy analysis (speech, vision, beats, loudness) is done locally by a companion footage engine, Dailies.
 
 ## Features
 
@@ -28,6 +28,7 @@ Everything runs on your own Mac. Footage never leaves the machine; heavy analysi
 |---|---|---|
 | **Proxy-first workflow** | Half- or quarter-res ProRes Proxy made with the Mac hardware encoder, one file at a time at low priority, attached to the clips automatically. Analysis reads the proxies too. | `create_proxies`, `proxy_status` |
 | **Cue-based rough cut** | Whisper listens to each file's own audio for slate calls (`3-2-1`, `action` … `cut`, `ok`; English, Vietnamese and more) and lays every take back to back in a new sequence, with a marker per take and red markers on low-confidence ones. | `rough_cut_by_cues` |
+| **Footage selects** | Scores b-roll and general footage about 4 times a second (sharpness on a grid, exposure, camera move, shake) and keeps the usable stretches: a selects sequence with a marker per segment, plus FCP7 XML, FCPXML, EDL and CSV for another editor. An hour of 4K in about 2 minutes. | `score_footage` |
 | **Best-take scoring** | Ranks takes by how they ended, cue confidence, how clearly the lines were spoken and retake calls ("again", "otra vez"…), with reasons; can build a selects sequence. | `select_best_takes` |
 | **Shot description** | One-line description, shot size, setting, sharpness, exposure, shake and faces for every clip, written into the Project panel so you can search and sort. | `describe_sources` |
 | **Shot search by text** | Type what you want to see ("close-up of a face", "wide shot of the restaurant") in English or Vietnamese. SigLIP 2 compares every second of each proxy with the words; hits come back ranked with in/out, as markers on the source clips and optionally as a "Tìm: …" sequence. | `find_shots` |
@@ -53,7 +54,7 @@ flowchart LR
     claude <-->|"MCP (stdio)"| server["mcp-premiere-pro<br/>Node.js server"]
     server <-->|"command files in<br/>PREMIERE_TEMP_DIR"| panel["CEP panel<br/>MCP Bridge (CEP)"]
     panel <-->|ExtendScript| ppro["Adobe Premiere Pro"]
-    server -->|"media CLI · JSON"| media["Media engine<br/>Whisper · SigLIP 2 · Qwen VL · beats"]
+    server -->|"dailies CLI · JSON"| media["Dailies<br/>selects · Whisper · SigLIP 2 · Qwen VL"]
     server -->|ffmpeg| out["Deliverables<br/>H.264 · ProRes · PNG"]
     server <-->|"handoff JSON"| ae["After Effects MCP"]
     ae <--> aepp["Adobe After Effects"]
@@ -61,7 +62,7 @@ flowchart LR
 
 - **Server** (`src/`): a TypeScript MCP server. Low-level tools live in `src/tools/index.ts`, `expanded.ts` and `color.ts`; the studio workflow lives in `src/tools/studio.ts`, `beats.ts`, `cleanup.ts` and `deliverables.ts`.
 - **CEP panel** (`cep-plugin/`): runs inside Premiere, picks up command files from the bridge folder and executes them as ExtendScript. It loads with Premiere and starts the bridge on its own.
-- **Media engine**: a separate local Python CLI that does speech-to-text, shot description, text-to-shot search, framing and beat detection on proxies, and caches its results in a `.media/` folder next to the footage.
+- **Dailies** ([Miinwan/dailies](https://github.com/Miinwan/dailies)): a separate local Python CLI that scores footage and picks selects, does speech-to-text, shot description, text-to-shot search and framing on proxies, and caches its results in a `.dailies/` folder next to the footage.
 - **Knowledge base** (`Kiến thức/`): Markdown notes on transitions, colour, plugins, exports and clean-up that the `pr_guide` tool reads at run time. Drop in a new `.md` and it is available without a rebuild.
 
 ## Quick start
@@ -72,7 +73,7 @@ flowchart LR
 - Adobe Premiere Pro 2026 (26.x; tested on 26.5)
 - Node.js 20 or newer
 - [ffmpeg](https://ffmpeg.org/) on the `PATH` or in Homebrew's location (exports, beats, loudness)
-- Optional: the media engine (Python, run with [uv](https://docs.astral.sh/uv/)) for cue-based cuts, shot description and shot search; the After Effects MCP for the AE round trip
+- Optional: Dailies, the footage engine (Python, run with [uv](https://docs.astral.sh/uv/)) for cue-based cuts, shot description and shot search; the After Effects MCP for the AE round trip
 
 ### 1. Install and build
 
@@ -105,7 +106,7 @@ If you skipped the installer, or use a different client, add the server by hand.
       "args": ["/path/to/mcp-premiere-pro/dist/index.js"],
       "env": {
         "PREMIERE_TEMP_DIR": "/tmp/premiere-mcp-bridge",
-        "MEDIA_DIR": "/path/to/media-engine"
+        "DAILIES_DIR": "/path/to/dailies"
       }
     }
   }
@@ -125,7 +126,7 @@ Restart the client, then ask: *"Run `verify_premiere_connection` and make no cha
 | Variable | What it points to |
 |---|---|
 | `PREMIERE_TEMP_DIR` | Bridge folder shared with the CEP panel (default `/tmp/premiere-mcp-bridge`) |
-| `MEDIA_DIR` | Folder of the media engine CLI |
+| `DAILIES_DIR` | Folder of the Dailies CLI (`MEDIA_DIR` still read) |
 | `UV_PATH` | `uv` binary, if it is not in `~/.local/bin` or Homebrew |
 | `FFMPEG_PATH` | `ffmpeg` binary, if it is not in Homebrew's location |
 | `MCP_ADOBE_BRIDGE_DIR` | Handoff folder shared with the After Effects MCP |
@@ -168,6 +169,7 @@ The 28 tools added on top of the base Premiere tool set (`studioToolNames` in [`
 | `rough_cut_by_cues` | Rough-cut footage by the slate calls heard in each file; new sequence, markers per take, low-confidence takes in red. |
 | `describe_sources` | Describe every shot (description, shot size, quality numbers) and write it into the Project panel's Comment and Log Note columns. |
 | `find_shots` | Find shots by words (English or Vietnamese) with SigLIP 2; ranked hits with in/out, markers on source clips, optional "Tìm: &lt;query&gt;" sequence. |
+| `score_footage` | Score footage and keep the usable stretches; selects sequence and XML/FCPXML/EDL/CSV export for another editor. |
 | `select_best_takes` | Rank takes with reasons; optionally build a selects sequence. |
 | `detect_beats` | Tempo, beats and bar starts of the music, with timeline markers. |
 | `cut_to_beats` | Copy of the sequence with every cut moved onto the beat. |
@@ -197,7 +199,7 @@ All the base tools (`get_project_info`, `list_sequences`, `add_to_timeline`, `ap
 - **Non-destructive by default.** Rough cuts, beat cuts, selects and aspect versions are built as new sequences; the AE round trip only disables the original clip.
 - **Checkpoints.** `checkpoint_project` saves a copy of the project before large changes; `clean_unused_media` takes one automatically.
 - **Nothing is deleted for good.** Clean-up only moves files inside the job folder to the macOS Trash (Put Back works), only after `confirm: true`, and re-checks usage right before acting.
-- **Local only.** The server, panel and media engine run on your machine. Nothing is uploaded.
+- **Local only.** The server, panel and Dailies run on your machine. Nothing is uploaded.
 - **Trust.** Any MCP client connected to this server can edit the open project. Use it only with clients you trust. See [SECURITY.md](SECURITY.md).
 
 ## Roadmap
@@ -208,7 +210,7 @@ All the base tools (`get_project_info`, `list_sequences`, `add_to_timeline`, `ap
 - [x] Per-scene colour layers, aspect versions, After Effects round trip
 - [x] Delivery presets, review cut, QC, project clean-up
 - [ ] Knowledge base with sub-folders in `pr_guide`
-- [ ] Silence removal driven by the media engine
+- [ ] Silence removal driven by Dailies
 - [ ] Windows support for the studio tools
 
 ## Credits

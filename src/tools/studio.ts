@@ -13,8 +13,8 @@ import { humanSize, insideFolder, jobFolderFor, moveToTrash, planCleanup, writeR
 
 /**
  * Studio tools: rough cut from slate cues and shot descriptions via
- * the MCP Adobe media engine (`media` CLI in MCP Adobe/Media, JSON contract v1
- * in Media/README.md), and a round trip to After Effects
+ * Dailies, the MCP Adobe footage engine (`dailies` CLI in MCP Adobe/Dailies, JSON contract v1
+ * in Dailies/README.md), and a round trip to After Effects
  * through a handoff JSON that the After Effects MCP reads and writes
  * (bridge.from_premiere / bridge.to_premiere). Nothing is destructive: the
  * rough cut goes into a NEW sequence, and an AE render is laid on the track
@@ -24,6 +24,7 @@ export const studioToolNames = [
   'rough_cut_by_cues',
   'describe_sources',
   'find_shots',
+  'score_footage',
   'send_to_after_effects',
   'return_from_after_effects',
   'create_aspect_versions',
@@ -55,9 +56,9 @@ export function isStudioTool(name: string): boolean {
   return (studioToolNames as readonly string[]).includes(name);
 }
 
-// ---------------------------------------------------------------- media CLI
+// ---------------------------------------------------------------- Dailies CLI (footage engine)
 
-const MEDIA_DIR = process.env.MEDIA_DIR || join(homedir(), 'Desktop', '03. Code', 'MCP Adobe', 'Media');
+const DAILIES_DIR = process.env.DAILIES_DIR || process.env.MEDIA_DIR || join(homedir(), 'Desktop', '03. Code', 'MCP Adobe', 'Dailies');
 function uvPath(): string {
   for (const p of [process.env.UV_PATH, join(homedir(), '.local/bin/uv'), '/opt/homebrew/bin/uv', '/usr/local/bin/uv']) {
     if (p && existsSync(p)) return p;
@@ -65,7 +66,7 @@ function uvPath(): string {
   return 'uv';
 }
 
-interface MediaJob {
+interface DailiesJob {
   key: string;
   args: string[];
   started: number;
@@ -75,17 +76,17 @@ interface MediaJob {
   stderrTail: string[];
   waiters: Array<() => void>;
 }
-const jobs = new Map<string, MediaJob>();
+const jobs = new Map<string, DailiesJob>();
 
-/** Start (or join) a media run; resolves when it ends or after waitMs, whichever comes first. */
-async function runMedia(args: string[], waitMs: number, fast: boolean): Promise<MediaJob> {
+/** Start (or join) a Dailies run; resolves when it ends or after waitMs, whichever comes first. */
+async function runDailies(args: string[], waitMs: number, fast: boolean): Promise<DailiesJob> {
   const key = args.join('\u0000');
   let job = jobs.get(key);
   if (!job || (job.done && job.code !== 0)) {
-    const j: MediaJob = { key, args, started: Date.now(), done: false, code: null, stdout: '', stderrTail: [], waiters: [] };
-    const child = spawn(uvPath(), ['run', 'media', ...args], {
-      cwd: MEDIA_DIR,
-      env: { ...process.env, ...(fast ? { MEDIA_CHE_DO: 'nhanh' } : {}) }
+    const j: DailiesJob = { key, args, started: Date.now(), done: false, code: null, stdout: '', stderrTail: [], waiters: [] };
+    const child = spawn(uvPath(), ['run', 'dailies', ...args], {
+      cwd: DAILIES_DIR,
+      env: { ...process.env, ...(fast ? { DAILIES_CHE_DO: 'nhanh' } : {}) }
     });
     child.stdout.on('data', (d) => { j.stdout += d.toString(); });
     child.stderr.on('data', (d) => {
@@ -107,12 +108,12 @@ async function runMedia(args: string[], waitMs: number, fast: boolean): Promise<
   return job;
 }
 
-function parseMedia(job: MediaJob): any {
+function parseDailies(job: DailiesJob): any {
   try { return JSON.parse(job.stdout); } catch { return null; }
 }
 
 /** Shared handling of exit codes 1/3/4 and "still running". Returns null when the JSON is usable. */
-function mediaProblem(job: MediaJob, tool: string): any | null {
+function dailiesProblem(job: DailiesJob, tool: string): any | null {
   if (!job.done) {
     return {
       success: true, tool, status: 'running',
@@ -121,12 +122,12 @@ function mediaProblem(job: MediaJob, tool: string): any | null {
       next: `Call ${tool} again with the same arguments to wait for the result (results are cached next to the footage, nothing restarts).`
     };
   }
-  const out = parseMedia(job);
+  const out = parseDailies(job);
   if (job.code === 0 && out) return null;
   if (out?.loi === 'thieu_proxy') return { success: false, tool, missingProxy: out.file, hint: 'Make proxies for these clips first (Premiere Create Proxies, or create_proxies), then call again; or pass allowOriginal: true to read the originals.' };
-  if (job.code === 3) return { success: false, tool, needsConfirmation: true, question: out?.cau_hoi ?? out, hint: 'Ask the user first: the media engine needs their OK (usually a download).' };
-  if (job.code === 4) return { success: false, tool, missingModel: true, detail: out, hint: 'The deep mode model is not installed: run `uv run media cai-mo-ta --model 2b --json` in MCP Adobe/Media after the user agrees, or use mode fast.' };
-  return { success: false, tool, exitCode: job.code, error: out?.thong_bao ?? out?.loi ?? 'media engine failed', stderr: job.stderrTail.slice(-6) };
+  if (job.code === 3) return { success: false, tool, needsConfirmation: true, question: out?.cau_hoi ?? out, hint: 'Ask the user first: the Dailies engine needs their OK (usually a download).' };
+  if (job.code === 4) return { success: false, tool, missingModel: true, detail: out, hint: 'The deep mode model is not installed: run `uv run dailies cai-mo-ta --model 2b --json` in MCP Adobe/Dailies after the user agrees, or use mode fast.' };
+  return { success: false, tool, exitCode: job.code, error: out?.thong_bao ?? out?.loi ?? 'Dailies engine failed', stderr: job.stderrTail.slice(-6) };
 }
 
 // ---------------------------------------------------------------- JSX helpers
@@ -209,28 +210,28 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     {
       name: 'rough_cut_by_cues',
       description:
-        'Rough-cut a folder of raw footage by the slate cues called on set ("3, 2, 1", "action", "diễn", "đi" to start; "cắt", "cut", "ok", "được rồi" to end), heard by Whisper in each file\'s own audio through the MCP Adobe media engine. ' +
+        'Rough-cut a folder of raw footage by the slate cues called on set ("3, 2, 1", "action", "diễn", "đi" to start; "cắt", "cut", "ok", "được rồi" to end), heard by Whisper in each file\'s own audio through Dailies, the MCP Adobe footage engine. ' +
         'One source can give many takes. Builds a NEW sequence with every take back to back, a→z by file then time, so the editor can reorder them; each take gets a sequence marker (take id, cue heard, dialogue, confidence) and low-confidence takes a red marker. Files with no cue are kept whole (unless dropNoCue). ' +
-        'Analysis is cached next to the footage (.media/); a long first run returns status "running" — call again with the same arguments to pick up the result.',
+        'Analysis is cached next to the footage (.dailies/); a long first run returns status "running" — call again with the same arguments to pick up the result.',
       inputSchema: z.object({
         sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after the junk was filtered out (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
         bin: z.string().optional().describe('Only the clips in this project bin'),
         allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
         sequenceName: z.string().optional().describe('New sequence name (default "Rough cut <folder>")'),
-        frame: z.string().optional().describe('Sequence frame: "1920x1080" (default), "9:16", "1:1", "4:5" or "<w>x<h>". The media engine fits each take (4K → 50 %, other ratios fill the frame centred on faces) and the scale/position go into Motion'),
+        frame: z.string().optional().describe('Sequence frame: "1920x1080" (default), "9:16", "1:1", "4:5" or "<w>x<h>". The Dailies engine fits each take (4K → 50 %, other ratios fill the frame centred on faces) and the scale/position go into Motion'),
         gapSeconds: z.number().min(0).optional().describe('Gap between takes in seconds (default 0)'),
         lowConfidence: z.number().min(0).max(1).optional().describe('Takes below this confidence get a red marker (default 0.6)'),
         dropNoCue: z.boolean().optional().describe('Leave out files with no cue (B-roll) instead of keeping them whole (default false)'),
         model: z.string().optional().describe('Whisper model (default large-v3)'),
-        fast: z.boolean().optional().describe('Run the media engine in fast mode instead of the quiet background mode (default true: the user is waiting)'),
-        waitSeconds: z.number().min(1).max(600).optional().describe('How long to wait for the media engine in this call before returning "running" (default 45)'),
+        fast: z.boolean().optional().describe('Run the Dailies engine in fast mode instead of the quiet background mode (default true: the user is waiting)'),
+        waitSeconds: z.number().min(1).max(600).optional().describe('How long to wait for the Dailies engine in this call before returning "running" (default 45)'),
         analyzeOnly: z.boolean().optional().describe('Only run the analysis and return the takes, do not touch Premiere')
       })
     },
     {
       name: 'describe_sources',
       description:
-        'Describe every shot (file) in a footage folder through the media engine: one-line description (in Vietnamese), shot size, setting, content labels, sharpness, exposure, shake, faces, a beauty score. mode "fast" needs no download; "deep" adds a local vision model (Qwen3.5 2B MLX) for natural sentences. ' +
+        'Describe every shot (file) in a footage folder through the Dailies engine: one-line description (in Vietnamese), shot size, setting, content labels, sharpness, exposure, shake, faces, a beauty score. mode "fast" needs no download; "deep" adds a local vision model (Qwen3.5 2B MLX) for natural sentences. ' +
         'With writeToProject, the description goes into each imported clip\'s Comment column and the quality numbers into Log Note, so they can be searched and sorted in the Project panel.',
       inputSchema: z.object({
         sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after the junk was filtered out (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
@@ -244,7 +245,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     {
       name: 'find_shots',
       description:
-        'Find shots by what is in the picture, in English or Vietnamese ("close-up of a face", "wide shot of the restaurant", "waiter in a red shirt", or "cô gái cầm menu"), through the media engine (SigLIP 2, local): every second of each clip\'s proxy is compared with the words, the best stretches come back ranked with in/out and a score. ' +
+        'Find shots by what is in the picture, in English or Vietnamese ("close-up of a face", "wide shot of the restaurant", "waiter in a red shirt", or "cô gái cầm menu"), through the Dailies engine (SigLIP 2, local): every second of each clip\'s proxy is compared with the words, the best stretches come back ranked with in/out and a score. ' +
         'Each hit becomes a marker on the source clip in the Project panel (open the clip in the Source Monitor to see it; searching the same words again replaces those markers). With placeOnTimeline, also builds a sequence "Tìm: <query>" with the hits in rank order. ' +
         'Uses the clips kept in the project with their proxies, like describe_sources. The first search on a folder reads the images (about 30 s for 5 minutes of footage); later searches take a few seconds.',
       inputSchema: z.object({
@@ -255,6 +256,30 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         top: z.number().int().min(1).max(50).optional().describe('How many hits (default 8)'),
         markers: z.boolean().optional().describe('Put a marker for each hit on its source clip in the project (default true)'),
         placeOnTimeline: z.boolean().optional().describe('Also build a sequence "Tìm: <query>" with the hits in rank order (default false)'),
+        waitSeconds: z.number().min(1).max(600).optional().describe('How long to wait in this call before returning "running" (default 45)')
+      })
+    },
+    {
+      name: 'score_footage',
+      description:
+        'Score b-roll and general footage like an assistant editor and keep only the usable stretches (selects), through the Dailies engine (local): about 4 samples a second from each clip\'s proxy, sharpness on a 6x6 grid (a sharp subject on a soft background counts as sharp), exposure, camera move (pan, tilt, zoom, roll) and shake (a smooth gimbal move is not shake), flags for black, blown out, frozen, flicker and motion blur. ' +
+        'Stretches above the threshold become segments with in/out, score, grade and camera move. With sequenceName, builds a new selects sequence with a marker on each segment; with exportFormats, also writes files for another editor (FCP7 XML for Premiere/Resolve, FCPXML for Final Cut, CMX3600 EDL, CSV), pointing at the original camera files with their source timecode. ' +
+        'Uses the clips kept in the project with their proxies, like describe_sources. Measured: 176 clips (58 min of 4K) in about 2 minutes in fast mode; later calls with another threshold or kind reuse the scan and take seconds. For slate-called takes use select_best_takes instead.',
+      inputSchema: z.object({
+        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project (with their proxies); with a folder, only the project clips inside it, or the whole folder when none are imported'),
+        bin: z.string().optional().describe('Only the clips in this project bin'),
+        allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file (keyframes only) instead of stopping'),
+        kind: z.enum(['balanced', 'b_roll', 'static']).optional().describe('balanced (default): sharp, well exposed, steady or smoothly moving; b_roll: camera moves are not penalised when smooth (gimbal, drone); static: locked-off shots only (interview, product, architecture)'),
+        threshold: z.number().min(0.05).max(0.99).optional().describe('Minimum score 0-1 (default 0.85, which matched the Cutdown app on a real shoot). Lower keeps more'),
+        minSeconds: z.number().min(0.2).max(60).optional().describe('Shortest segment in seconds (default 2)'),
+        bridgeSeconds: z.number().min(0).max(10).optional().describe('Join two segments when the score dips for less than this (default 2)'),
+        sequenceName: z.string().optional().describe('Build a new sequence with this name holding the selects end to end, a marker on each (score, grade, camera move)'),
+        order: z.enum(['file', 'score']).optional().describe('Segment order: by file name then time (default) or best score first'),
+        gapSeconds: z.number().min(0).max(10).optional().describe('Gap between segments on the sequence (default 0)'),
+        handles: z.number().min(0).max(5).optional().describe('Extra seconds kept before and after each segment (default 0)'),
+        exportFormats: z.array(z.enum(['xml', 'fcpxml', 'edl', 'csv'])).optional().describe('Also write these files for another editor: xml (Premiere, Resolve), fcpxml (Final Cut), edl, csv'),
+        exportFolder: z.string().optional().describe('Folder for the exported files (default "<source folder>/Dailies selects")'),
+        fast: z.boolean().optional().describe('Use the whole machine (default true: the user is waiting); false runs in the quiet background mode'),
         waitSeconds: z.number().min(1).max(600).optional().describe('How long to wait in this call before returning "running" (default 45)')
       })
     },
@@ -383,7 +408,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     ,{
       name: 'create_proxies',
       description:
-        'FIRST STEP of a job: make edit proxies for every video in a footage folder so Premiere (and the media engine) work on light files instead of 4K. ProRes Proxy with the Mac hardware encoder (VideoToolbox, cool and fast), half resolution by default (4K → 1080p), same fps, duration and audio channels so Premiere accepts them; saved as "<folder>/Proxies/<name>_Proxy.mov", one file at a time at low priority so the machine stays cool. Existing proxies are reused. When done, attaches each proxy to its clip in the open project (Toggle Proxies in Premiere switches). Runs in the background: check with proxy_status.',
+        'FIRST STEP of a job: make edit proxies for every video in a footage folder so Premiere (and the Dailies engine) work on light files instead of 4K. ProRes Proxy with the Mac hardware encoder (VideoToolbox, cool and fast), half resolution by default (4K → 1080p), same fps, duration and audio channels so Premiere accepts them; saved as "<folder>/Proxies/<name>_Proxy.mov", one file at a time at low priority so the machine stays cool. Existing proxies are reused. When done, attaches each proxy to its clip in the open project (Toggle Proxies in Premiere switches). Runs in the background: check with proxy_status.',
       inputSchema: z.object({
         sourceFolder: z.string().describe('Absolute footage folder'),
         size: z.enum(['1/2', '1/4']).optional().describe('Proxy resolution (default 1/2)'),
@@ -414,7 +439,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     }
     ,{
       name: 'transcribe_to_captions',
-      description: 'Make captions for a cut from what the media engine already heard (word timings in <source>/.media, written by rough_cut_by_cues or describe_sources): for every clip on the source track, the words inside its in/out are placed at its timeline position, split into lines of at most maxChars, written to "<project folder>/Phụ đề/<sequence>.srt" and added as a caption track. Spoken language is whatever was heard (Vietnamese, English…); slate calls outside the takes are not included. Edit the text in Premiere\'s Text panel afterwards.',
+      description: 'Make captions for a cut from what the Dailies engine already heard (word timings in <source>/.dailies, written by rough_cut_by_cues or describe_sources): for every clip on the source track, the words inside its in/out are placed at its timeline position, split into lines of at most maxChars, written to "<project folder>/Phụ đề/<sequence>.srt" and added as a caption track. Spoken language is whatever was heard (Vietnamese, English…); slate calls outside the takes are not included. Edit the text in Premiere\'s Text panel afterwards.',
       inputSchema: z.object({
         ...seqRef,
         sourceTrack: z.number().int().min(0).optional().describe('Video track with the footage (default 0)'),
@@ -424,7 +449,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     }
     ,{
       name: 'detect_beats',
-      description: 'Find the beat of the music: tempo (BPM), every beat and the first beat of each bar. Give a file, or let it read the music already on the timeline (audio-only clips that are not named like a voiceover) and drop cyan markers "Nhịp 1" (bar 1) on each bar (markers: "beats" for every beat, "none" for no markers). Results are cached in <music folder>/.media. Check by ear: tempo can come out at half or double on sparse music.',
+      description: 'Find the beat of the music: tempo (BPM), every beat and the first beat of each bar. Give a file, or let it read the music already on the timeline (audio-only clips that are not named like a voiceover) and drop cyan markers "Nhịp 1" (bar 1) on each bar (markers: "beats" for every beat, "none" for no markers). Results are cached in <music folder>/.dailies. Check by ear: tempo can come out at half or double on sparse music.',
       inputSchema: z.object({
         ...seqRef,
         file: z.string().optional().describe('Music file to analyse instead of the timeline'),
@@ -448,7 +473,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     },
     {
       name: 'select_best_takes',
-      description: 'Rank the takes of a footage folder from what the media engine heard: ended on a cut call, cue confidence, how clearly the lines were spoken, retake calls ("otra vez", "again", "lại đi"…) in or right after the take, very short takes, later takes slightly preferred. Returns the ranking with reasons per file (groupBy "file") or overall ("none"); with sequenceName it also builds a selects sequence of the best take(s) with the score on each marker. Uses the same cache as rough_cut_by_cues. Always check the picks by eye.',
+      description: 'Rank the takes of a footage folder from what the Dailies engine heard: ended on a cut call, cue confidence, how clearly the lines were spoken, retake calls ("otra vez", "again", "lại đi"…) in or right after the take, very short takes, later takes slightly preferred. Returns the ranking with reasons per file (groupBy "file") or overall ("none"); with sequenceName it also builds a selects sequence of the best take(s) with the score on each marker. Uses the same cache as rough_cut_by_cues. Always check the picks by eye.',
       inputSchema: z.object({
         sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project after the junk was filtered out (with the proxies attached in Premiere); with a folder, only the project clips inside it, or the whole folder when none are imported'),
         bin: z.string().optional().describe('Only the clips in this project bin'),
@@ -536,6 +561,7 @@ export async function executeStudioTool(bridge: PremiereProTransport, name: stri
       case 'rough_cut_by_cues': return await roughCut(bridge, args);
       case 'describe_sources': return await describeSources(bridge, args);
       case 'find_shots': return await findShots(bridge, args);
+      case 'score_footage': return await scoreFootage(bridge, args);
       case 'send_to_after_effects': return await sendToAe(bridge, args);
       case 'return_from_after_effects': return await returnFromAe(bridge, args);
       case 'create_aspect_versions': return await aspectVersions(bridge, args);
@@ -650,7 +676,7 @@ return JSON.stringify({success:true,sequence:seq.name,sequenceId:seq.sequenceID,
 }
 
 /**
- * What the media engine should look at: the clips the user kept in the project
+ * What the Dailies engine should look at: the clips the user kept in the project
  * (after filtering the junk) with the proxies attached in Premiere, passed as a
  * --danh-sach file; or a whole folder when nothing from it is imported.
  */
@@ -687,10 +713,10 @@ async function roughCut(bridge: PremiereProTransport, args: Record<string, any>)
   if (args.model) cli.push('--model', String(args.model));
   if (args.dropNoCue) cli.push('--bo-file-khong-lenh');
   cli.push('--khung', String(args.frame ?? '1920x1080'));
-  const job = await runMedia(cli, (args.waitSeconds ?? 45) * 1000, args.fast !== false);
-  const problem = mediaProblem(job, 'rough_cut_by_cues');
+  const job = await runDailies(cli, (args.waitSeconds ?? 45) * 1000, args.fast !== false);
+  const problem = dailiesProblem(job, 'rough_cut_by_cues');
   if (problem) return problem;
-  const out = parseMedia(job);
+  const out = parseDailies(job);
   const takes = out.take as MediaTake[];
   if (!takes?.length) return { success: false, error: 'no takes found in this folder', detail: out };
   const rows = layoutTakes(takes, args.gapSeconds ?? 0, args.lowConfidence ?? 0.6);
@@ -709,10 +735,10 @@ async function describeSources(bridge: PremiereProTransport, args: Record<string
   const src = await mediaSource(bridge, args);
   if ('error' in src) return { success: false, tool: 'describe_sources', error: src.error };
   const cli = ['mo-ta-shot', ...src.cli, '--che-do', args.mode === 'deep' ? 'ky' : 'nhanh', '--json'];
-  const job = await runMedia(cli, (args.waitSeconds ?? 45) * 1000, true);
-  const problem = mediaProblem(job, 'describe_sources');
+  const job = await runDailies(cli, (args.waitSeconds ?? 45) * 1000, true);
+  const problem = dailiesProblem(job, 'describe_sources');
   if (problem) return problem;
-  const out = parseMedia(job);
+  const out = parseDailies(job);
   const shots = (out.shot ?? []).map((s: any) => ({
     file: s.file,
     description: s.mo_ta,
@@ -772,19 +798,103 @@ export function layoutHits(hits: MediaHit[], query: string) {
   });
 }
 
+export interface DailiesSegment {
+  vao_giay: number;
+  ra_giay: number;
+  diem_tb: number;
+  diem_dinh: number;
+  giay_dinh: number;
+  muc: 'tot' | 'kha' | 'dat';
+  may: string;
+  co: string[];
+}
+
+const GRADE: Record<string, string> = { tot: 'tốt', kha: 'khá', dat: 'đạt' };
+const CAMERA: Record<string, string> = {
+  dung_yen: 'đứng yên', lia_trai: 'lia trái', lia_phai: 'lia phải', nghieng_len: 'nghiêng lên', nghieng_xuong: 'nghiêng xuống',
+  zoom_vao: 'zoom vào', zoom_ra: 'zoom ra', xoay_trai: 'xoay trái', xoay_phai: 'xoay phải', hon_hop: 'hỗn hợp'
+};
+
+/** Selects of a cham-diem result as sequence rows (shared layout with the takes). Pure, for tests. */
+export function layoutSelects(clips: { file: string; ten_file: string; thoi_luong_giay: number; doan: DailiesSegment[] }[], order: 'file' | 'score' = 'file', gap = 0, handles = 0) {
+  const all = clips.flatMap((c) => c.doan.map((d, i) => ({ c, d, i })));
+  if (order === 'score') all.sort((a, b) => b.d.diem_tb - a.d.diem_tb);
+  let t = 0;
+  return all.map(({ c, d, i }) => {
+    const inS = Math.max(0, d.vao_giay - handles);
+    const outS = Math.min(c.thoi_luong_giay || d.ra_giay + handles, d.ra_giay + handles);
+    const row = {
+      id: `${c.ten_file.replace(/\.[^.]+$/, '')}-s${i + 1}`,
+      file: c.file,
+      in: Math.round(inS * 1000) / 1000,
+      out: Math.round(outS * 1000) / 1000,
+      at: Math.round(t * 1000) / 1000,
+      name: `${c.ten_file.replace(/\.[^.]+$/, '')} S${i + 1}`,
+      marker: `điểm ${d.diem_tb.toFixed(2)} (đỉnh ${d.diem_dinh.toFixed(2)} ở ${d.giay_dinh.toFixed(1)} s) · ${GRADE[d.muc] ?? d.muc} · ${CAMERA[d.may] ?? d.may}${d.co.length ? ' · cờ: ' + d.co.join(', ') : ''}`,
+      dialogue: '',
+      low: d.muc === 'dat',
+      score: d.diem_tb,
+      scale: null as number | null,
+      pos: null as number[] | null
+    };
+    t += outS - inS + gap;
+    return row;
+  });
+}
+
+async function scoreFootage(bridge: PremiereProTransport, args: Record<string, any>) {
+  const src = await mediaSource(bridge, args);
+  if ('error' in src) return { success: false, tool: 'score_footage', error: src.error };
+  const kind = ({ balanced: 'can_bang', b_roll: 'b_roll', static: 'tinh' } as Record<string, string>)[args.kind ?? 'balanced'] ?? 'can_bang';
+  const cli = ['cham-diem', ...src.cli, '--json', '--kieu', kind];
+  if (args.threshold !== undefined) cli.push('--nguong', String(args.threshold));
+  if (args.minSeconds !== undefined) cli.push('--ngan-nhat', String(args.minSeconds));
+  if (args.bridgeSeconds !== undefined) cli.push('--noi-khoang', String(args.bridgeSeconds));
+  const job = await runDailies(cli, (args.waitSeconds ?? 45) * 1000, args.fast !== false);
+  const problem = dailiesProblem(job, 'score_footage');
+  if (problem) return problem;
+  const out = parseDailies(job);
+  const clips = (out.clip ?? []) as any[];
+  const order = args.order === 'score' ? 'score' : 'file';
+  const rows = layoutSelects(clips, order, args.gapSeconds ?? 0, args.handles ?? 0);
+  const result: any = {
+    success: true, tool: 'score_footage', kind: args.kind ?? 'balanced', threshold: out.cai_dat?.nguong,
+    clips: out.so_clip, clipsWithSelects: out.so_clip_co_doan, segments: out.so_doan,
+    selectedSeconds: Math.round(rows.reduce((a, r) => a + r.out - r.in, 0) * 10) / 10,
+    scannedNow: out.so_clip_quet_moi, seconds: out.giay_xu_ly, cache: out.file_ket_qua,
+    best: [...rows].sort((a, b) => b.score - a.score).slice(0, 10).map((r) => ({ clip: r.name, in: r.in, out: r.out, note: r.marker })),
+    noSelects: clips.filter((c) => !c.doan.length).map((c) => c.ten_file)
+  };
+  if (!rows.length) return { ...result, note: 'nothing reached the threshold; lower threshold or try kind b_roll' };
+  if (args.sequenceName) {
+    const files = Array.from(new Set(rows.map((r) => r.file)));
+    result.sequence = await jsx(bridge, takesSequenceJsx(String(args.sequenceName), files, rows, null, args.gapSeconds ?? 0), 600000);
+  }
+  if (Array.isArray(args.exportFormats) && args.exportFormats.length) {
+    const xcli = ['xuat', String(out.file_ket_qua), '--json', '--dinh-dang', args.exportFormats.join(','), '--thu-tu', order,
+      '--khoang', String(args.gapSeconds ?? 0), '--dem', String(args.handles ?? 0)];
+    if (args.exportFolder) xcli.push('--ra', String(args.exportFolder));
+    if (args.sequenceName) xcli.push('--ten', String(args.sequenceName));
+    const xj = await runDailies(xcli, 120000, true);
+    const xp = dailiesProblem(xj, 'score_footage');
+    result.export = xp ?? { files: parseDailies(xj)?.tep };
+  }
+  return result;
+}
+
 async function findShots(bridge: PremiereProTransport, args: Record<string, any>) {
   const query = String(args.query ?? '').trim();
   if (!query) return { success: false, tool: 'find_shots', error: 'query is empty' };
   const src = await mediaSource(bridge, args);
   if ('error' in src) return { success: false, tool: 'find_shots', error: src.error };
   const cli = ['tim-shot', query, ...src.cli, '--top', String(args.top ?? 8), '--json'];
-  const job = await runMedia(cli, (args.waitSeconds ?? 45) * 1000, true);
-  const problem = mediaProblem(job, 'find_shots');
+  const job = await runDailies(cli, (args.waitSeconds ?? 45) * 1000, true);
+  const problem = dailiesProblem(job, 'find_shots');
   if (problem) {
-    if (problem.missingModel) problem.hint = 'Shot search needs SigLIP 2: run `uv run media tai-model --json` in MCP Adobe/Media (about 380 MB, ask the user first).';
+    if (problem.missingModel) problem.hint = 'Shot search needs SigLIP 2: run `uv run dailies tai-model --json` in MCP Adobe/Dailies (about 380 MB, ask the user first).';
     return problem;
   }
-  const out = parseMedia(job);
+  const out = parseDailies(job);
   const hits = (out.ket_qua ?? []) as MediaHit[];
   const result: any = {
     success: true, tool: 'find_shots', query, searched: src.clips || null, cache: out.file_ket_qua,
@@ -975,7 +1085,7 @@ for(var t=0;t<s.videoTracks.numTracks;t++){var tr=s.videoTracks[t];for(var i=0;i
 return JSON.stringify({success:true,name:s.name,id:s.sequenceID,W:W,H:H,clips:clips});`);
   if (!read?.success) return { tool: 'create_aspect_versions', ...read };
   const W = read.W, H = read.H;
-  // 2. The media engine computes the framing.
+  // 2. The Dailies engine computes the framing.
   const clipJson = {
     khung: { rong: W, cao: H },
     clip: read.clips.map((c: any) => {
@@ -993,10 +1103,10 @@ return JSON.stringify({success:true,name:s.name,id:s.sequenceID,W:W,H:H,clips:cl
   mkdirSync(tmp, { recursive: true });
   const jf = join(tmp, `${read.id}.json`);
   writeFileSync(jf, JSON.stringify(clipJson), 'utf8');
-  const job = await runMedia(['bo-cuc', jf, '--khung', frames.map((f) => `${f.w}x${f.h}`).join(','), '--json'], 300000, true);
-  const problem = mediaProblem(job, 'create_aspect_versions');
+  const job = await runDailies(['bo-cuc', jf, '--khung', frames.map((f) => `${f.w}x${f.h}`).join(','), '--json'], 300000, true);
+  const problem = dailiesProblem(job, 'create_aspect_versions');
   if (problem) return problem;
-  const out = parseMedia(job);
+  const out = parseDailies(job);
   // 3. One duplicated sequence per frame.
   const results = [];
   for (let n = 0; n < frames.length; n++) {
@@ -1437,7 +1547,7 @@ return JSON.stringify({success:true,id:s.sequenceID,name:s.name,project:String(a
   for (const c of read.clips as { file: string; inS: number; outS: number; startS: number }[]) {
     if (!cache.has(c.file)) {
       let found: { fps: number; sentences: Sentence[] } | null = null;
-      const dir = join(c.file.replace(/[^/]+$/, ''), '.media');
+      const dir = join(c.file.replace(/[^/]+$/, ''), '.dailies');
       const idx = join(dir, 'take_khau_lenh.json');
       if (existsSync(idx)) {
         const take = JSON.parse(readFileSync(idx, 'utf8'));
@@ -1454,7 +1564,7 @@ return JSON.stringify({success:true,id:s.sequenceID,name:s.name,project:String(a
     if (!t) { missing.push(basename(c.file)); continue; }
     all.push(...cuesForClip(t.sentences, t.fps, c.inS, c.outS, c.startS, args.maxChars ?? 42));
   }
-  if (!all.length) return { success: false, tool: 'transcribe_to_captions', error: 'no words found for these clips', missingTranscript: missing, hint: 'run rough_cut_by_cues (or describe_sources) on the footage folder first so the media engine has listened to it' };
+  if (!all.length) return { success: false, tool: 'transcribe_to_captions', error: 'no words found for these clips', missingTranscript: missing, hint: 'run rough_cut_by_cues (or describe_sources) on the footage folder first so the Dailies engine has listened to it' };
   const dir = join(String(read.project).replace(/[^/]+$/, ''), 'Phụ đề');
   mkdirSync(dir, { recursive: true });
   const srt = join(dir, `${String(read.name).replace(/[\\/:*?"<>|]/g, ' ')}.srt`);
@@ -1619,7 +1729,7 @@ const FLUB = /\b(otra vez|de nuevo|una vez m[aá]s|again|one more|sorry|perd[oó
 
 export interface ScoredTake { id: string; score: number; reasons: string[] }
 
-/** Score a take from what the media engine heard. Higher is better; reasons say why. Pure, for tests. */
+/** Score a take from what the Dailies engine heard. Higher is better; reasons say why. Pure, for tests. */
 export function scoreTake(t: MediaTake & { khau_lenh_ra?: { loai?: string; chu?: string } | null; ket_thuc_bang?: string }, words: { chu: string; vao: number; ra: number; xac_suat?: number }[], fps: number): ScoredTake {
   let score = 50;
   const reasons: string[] = [];
@@ -1648,14 +1758,14 @@ export function scoreTake(t: MediaTake & { khau_lenh_ra?: { loai?: string; chu?:
 async function selectBestTakes(bridge: PremiereProTransport, args: Record<string, any>) {
   const src = await mediaSource(bridge, args);
   if ('error' in src) return { success: false, tool: 'select_best_takes', error: src.error };
-  const job = await runMedia(['take-khau-lenh', ...src.cli, '--json', '--khung', String(args.frame ?? '1920x1080')], (args.waitSeconds ?? 45) * 1000, args.fast !== false);
-  const problem = mediaProblem(job, 'select_best_takes');
+  const job = await runDailies(['take-khau-lenh', ...src.cli, '--json', '--khung', String(args.frame ?? '1920x1080')], (args.waitSeconds ?? 45) * 1000, args.fast !== false);
+  const problem = dailiesProblem(job, 'select_best_takes');
   if (problem) return problem;
-  const out = parseMedia(job);
+  const out = parseDailies(job);
   const takes = (out.take ?? []) as any[];
   if (!takes.length) return { success: false, tool: 'select_best_takes', error: 'no takes found in this folder' };
   const scored = takes.map((t) => {
-    const pf = join(String(out.thu_muc ?? src.folder), '.media', 'phan_tich', `${t.media_id}.json`);
+    const pf = join(String(out.thu_muc ?? src.folder), '.dailies', 'phan_tich', `${t.media_id}.json`);
     let words: any[] = [];
     let fps = t.fps ? t.fps.tu / t.fps.mau : 25;
     if (existsSync(pf)) {

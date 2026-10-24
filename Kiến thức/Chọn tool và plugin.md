@@ -16,10 +16,11 @@ Updated 2026-10-23. Tools read from `src/tools/studio.ts` (studio tools) and `sr
 
 | Task | Tool | Plugin / effect | Notes |
 |---|---|---|---|
-| Rough cut by the slate calls on set | `rough_cut_by_cues` | Media engine (Whisper) | Takes ordered by file name then time; data contract in `MCP Adobe/Media/README.md` |
-| Describe every shot to choose from | `describe_sources` | Media engine (`fast` needs no download, `deep` uses a local vision model) | |
-| Find shots by words | `find_shots` | Media engine (SigLIP 2) | English or Vietnamese query; markers on source clips, optional "Tìm: <query>" sequence; first search on a folder reads the images (about 30 s per 5 min of footage) |
-| Rank takes | `select_best_takes` | Media engine | Same cache as `rough_cut_by_cues`; always check the picks by eye |
+| Rough cut by the slate calls on set | `rough_cut_by_cues` | Dailies (Whisper) | Takes ordered by file name then time; data contract in `MCP Adobe/Dailies/README.md` |
+| Describe every shot to choose from | `describe_sources` | Dailies (`fast` needs no download, `deep` uses a local vision model) | |
+| Find shots by words | `find_shots` | Dailies (SigLIP 2) | English or Vietnamese query; markers on source clips, optional "Tìm: <query>" sequence; first search on a folder reads the images (about 30 s per 5 min of footage) |
+| Pick usable b-roll (sharp, steady, well exposed) and build a selects sequence or hand an XML/EDL to another editor | `score_footage` | Dailies | kind `b_roll` for gimbal/drone, `static` for locked-off shots; threshold 0.85 by default |
+| Rank takes | `select_best_takes` | Dailies | Same cache as `rough_cut_by_cues`; always check the picks by eye |
 | Remove silences | `detect_silence` then `razor_timeline_at_time` / `ripple_delete` | — | AutoCut is a manual panel; use the MCP tools first |
 | Find cut points in an already edited file | `detect_scene_edits`, `scene_edit_detection` | Premiere's Scene Edit Detection | |
 | Nest, staircase clips, freeze | `mako` (nest/unnest keeps effects, staircase, freeze_frame) | Mako | The Mako panel must have opened once in the Premiere session |
@@ -54,7 +55,7 @@ Updated 2026-10-23. Tools read from `src/tools/studio.ts` (studio tools) and `sr
 | Titles, lower thirds from templates | `add_text_overlay`, `import_mogrt`, `import_mogrt_from_library` | 105 installed MOGRTs (list: `After Effects/Kiến thức/Plugin đã cài/MOGRT.md`) | `add_text_overlay` needs a .mogrt path |
 | Colour plate for a logo | `add_color_matte` | — | Not Premiere's Color Matte (its colour picker blocks scripting) |
 | Logos, custom animation | AE `template.logo_reveal`, `psd.*` then `return_from_after_effects` | — | Client logos: `brand.find_logo` on the AE side |
-| Captions | `transcribe_to_captions`, `create_caption_track` | Media engine | Reuses the speech heard during the rough cut |
+| Captions | `transcribe_to_captions`, `create_caption_track` | Dailies | Reuses the speech heard during the rough cut |
 
 ## Audio
 

@@ -1,7 +1,7 @@
 // Music beat detection without extra dependencies: ffmpeg decodes to mono PCM,
 // a spectral-flux onset envelope gives the "attack" curve, autocorrelation picks
 // the tempo and dynamic programming (Ellis 2007) lays the beats on the onsets.
-// Results are cached next to the music in "<folder>/.media/nhip_<file>.json".
+// Results are cached next to the music in "<folder>/.dailies/nhip_<file>.json".
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -170,7 +170,7 @@ export function analyseSignal(x: Float32Array, sr = SR): Omit<BeatResult, 'file'
 }
 
 function cachePath(file: string): string {
-  return join(dirname(file), '.media', `nhip_${basename(file)}.json`);
+  return join(dirname(file), '.dailies', `nhip_${basename(file)}.json`);
 }
 
 export async function detectBeats(file: string, force = false): Promise<BeatResult & { cached: boolean }> {

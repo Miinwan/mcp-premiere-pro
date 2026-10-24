@@ -1,4 +1,4 @@
-import { layoutTakes, layoutHits, getStudioTools, isStudioTool } from '../../tools/studio.js';
+import { layoutTakes, layoutHits, layoutSelects, getStudioTools, isStudioTool } from '../../tools/studio.js';
 
 const take = (stt: number, file: string, n: number, vao: number, ra: number, tin = 0.9, ca = false) => ({
   stt, id: `m-${file}-t0${n}`, file: `/src/${file}`, ten_file: file, take_trong_file: n,
@@ -11,12 +11,12 @@ const take = (stt: number, file: string, n: number, vao: number, ra: number, tin
 describe('studio tools', () => {
   it('registers the four tools', () => {
     const names = getStudioTools(new Set()).map((t) => t.name);
-    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'find_shots', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers', 'create_proxies', 'proxy_status', 'checkpoint_project', 'organize_project_bins', 'qc_before_export', 'transcribe_to_captions', 'detect_beats', 'cut_to_beats', 'select_best_takes', 'place_voiceover', 'normalize_loudness', 'review_cut', 'review_unused_media', 'clean_unused_media']);
+    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'find_shots', 'score_footage', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers', 'create_proxies', 'proxy_status', 'checkpoint_project', 'organize_project_bins', 'qc_before_export', 'transcribe_to_captions', 'detect_beats', 'cut_to_beats', 'select_best_takes', 'place_voiceover', 'normalize_loudness', 'review_cut', 'review_unused_media', 'clean_unused_media']);
     expect(isStudioTool('rough_cut_by_cues')).toBe(true);
     expect(getStudioTools(new Set(['describe_sources'])).map((t) => t.name)).not.toContain('describe_sources');
   });
 
-  it('lays takes back to back in media engine order with markers', () => {
+  it('lays takes back to back in Dailies engine order with markers', () => {
     const rows = layoutTakes([take(2, 'A010.mp4', 2, 20, 24), take(1, 'A010.mp4', 1, 2.169, 6.657), take(3, 'B001.mp4', 1, 0, 4, 0, true)], 0.5);
     expect(rows.map((r) => r.name)).toEqual(['A010 T1', 'A010 T2', 'B001 T1']);
     expect(rows[0].at).toBe(0);
@@ -27,7 +27,7 @@ describe('studio tools', () => {
     expect(rows[2].low).toBe(true);
   });
 
-  it('carries media engine framing into Motion values', () => {
+  it('carries Dailies engine framing into Motion values', () => {
     const t = { ...take(1, 'A.mp4', 1, 0, 2), bo_cuc: { cach: 'vua_khung', scale_phan_tram: 50, vi_tri: { x: 960, y: 540 }, vi_tri_chuan: { x: 0.5, y: 0.5 } } };
     const [row] = layoutTakes([t]);
     expect(row.scale).toBe(50);
@@ -160,5 +160,26 @@ describe('phase 6 helpers', () => {
     const kinds = r.findings.map((f: any) => f.kind);
     expect(kinds).toEqual(expect.arrayContaining(['flash_frame', 'jump_cut', 'long_shot']));
     expect(r.beats.offBeat.length).toBe(1);
+  });
+});
+
+describe('layoutSelects', () => {
+  const seg = (vao: number, ra: number, diem: number, muc: 'tot' | 'kha' | 'dat') =>
+    ({ vao_giay: vao, ra_giay: ra, diem_tb: diem, diem_dinh: diem + 0.02, giay_dinh: vao + 1, muc, may: 'dung_yen', co: [] as string[] });
+  const clips = [
+    { file: '/x/A002.MP4', ten_file: 'A002.MP4', thoi_luong_giay: 10, doan: [seg(1, 4, 0.9, 'kha')] },
+    { file: '/x/A001.MP4', ten_file: 'A001.MP4', thoi_luong_giay: 6, doan: [seg(0.5, 3, 0.95, 'tot'), seg(4, 5.9, 0.86, 'dat')] }
+  ];
+  it('lays segments end to end in the given order with handles clamped to the file', () => {
+    const rows = layoutSelects(clips, 'file', 0.5, 0.5);
+    expect(rows.map((r) => r.name)).toEqual(['A002 S1', 'A001 S1', 'A001 S2']);
+    expect(rows[0]).toMatchObject({ in: 0.5, out: 4.5, at: 0 });
+    expect(rows[1]).toMatchObject({ in: 0, out: 3.5, at: 4.5 });
+    expect(rows[2]).toMatchObject({ in: 3.5, out: 6, at: 8.5, low: true });
+    expect(rows[1].marker).toContain('điểm 0.95');
+    expect(rows[1].marker).toContain('đứng yên');
+  });
+  it('orders by score when asked', () => {
+    expect(layoutSelects(clips, 'score').map((r) => r.score)).toEqual([0.95, 0.9, 0.86]);
   });
 });
