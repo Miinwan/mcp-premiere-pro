@@ -19,7 +19,7 @@ Updated 2026-10-23. Tools read from `src/tools/studio.ts` (studio tools) and `sr
 | Rough cut by the slate calls on set | `rough_cut_by_cues` | Dailies (Whisper) | Takes ordered by file name then time; data contract in `MCP Adobe/Dailies/README.md` |
 | Describe every shot to choose from | `describe_sources` | Dailies (`fast` needs no download, `deep` uses a local vision model) | |
 | Find shots by words | `find_shots` | Dailies (SigLIP 2) | English or Vietnamese query; markers on source clips, optional "Tìm: <query>" sequence; first search on a folder reads the images (about 30 s per 5 min of footage) |
-| Before any edit: what is this footage (sizes, rates, slow motion, time-lapse, log) and what sequence to use | `inspect_footage` | Dailies | Required first step; give the delivery `frame` and `fps`; 4K and other sizes are fit to frame |
+| Before any edit: what is this footage (sizes, rates, slow motion, time-lapse, log) against the sequence the user made | `inspect_footage` | Dailies | Required first step after the user creates the sequence and imports; open their sequence (or `templateSequence`); 4K and other sizes are fit to its frame |
 | Pick usable b-roll (sharp, steady, well exposed) and build a selects sequence or hand an XML/EDL to another editor | `score_footage` | Dailies | kind `b_roll` for gimbal/drone, `static` for locked-off shots; threshold 0.85 by default |
 | Rank takes | `select_best_takes` | Dailies | Same cache as `rough_cut_by_cues`; always check the picks by eye |
 | Remove silences | `detect_silence` then `razor_timeline_at_time` / `ripple_delete` | — | AutoCut is a manual panel; use the MCP tools first |

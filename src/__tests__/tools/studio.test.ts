@@ -1,4 +1,4 @@
-import { layoutTakes, layoutHits, layoutSelects, seedFile, getStudioTools, isStudioTool } from '../../tools/studio.js';
+import { layoutTakes, layoutHits, layoutSelects, seedFile, fpsArg, getStudioTools, isStudioTool } from '../../tools/studio.js';
 
 const take = (stt: number, file: string, n: number, vao: number, ra: number, tin = 0.9, ca = false) => ({
   stt, id: `m-${file}-t0${n}`, file: `/src/${file}`, ten_file: file, take_trong_file: n,
@@ -189,5 +189,14 @@ describe('seedFile', () => {
     const rates = new Map([['/a.mp4', { fps: 29.97 }], ['/b.mp4', { fps: 59.94 }], ['/c.mp4', { fps: 59.94 }], ['/d.mp4', { fps: null }]]);
     expect(seedFile(['/a.mp4', '/b.mp4', '/c.mp4'], rates, 60000 / 1001)).toBe('/b.mp4');
     expect(seedFile(['/a.mp4', '/d.mp4'], rates, 24000 / 1001)).toBeNull();
+  });
+});
+
+describe('fpsArg', () => {
+  it('turns a sequence timebase rate into a Dailies frame rate', () => {
+    expect(fpsArg(254016000000 / 10594584000)).toBe('24000/1001');
+    expect(fpsArg(254016000000 / 4237833600)).toBe('60000/1001');
+    expect(fpsArg(25)).toBe('25');
+    expect(fpsArg(24)).toBe('24');
   });
 });

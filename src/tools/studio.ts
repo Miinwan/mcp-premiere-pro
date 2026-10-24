@@ -220,7 +220,9 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
         sequenceName: z.string().optional().describe('New sequence name (default "Rough cut <folder>")'),
         frame: z.string().optional().describe('Sequence frame: "1920x1080" (default), "9:16", "1:1", "4:5" or "<w>x<h>". The Dailies engine fits each take (4K → 50 %, other ratios fill the frame centred on faces) and the scale/position go into Motion'),
-        fps: z.string().optional().describe('Sequence frame rate ("23.976", "25", "29.97"…). Default: from inspect_footage, the most common rate among normal-speed clips'),
+        templateSequence: z.string().optional().describe('Your sequence (you create it and import the footage): its frame size and frame rate decide fit to frame, and the new sequence is an empty copy of it with the same settings. Default: the active sequence'),
+        useMySequence: z.boolean().optional().describe('false: ignore any open sequence and recommend one from the footage instead (default true)'),
+        fps: z.string().optional().describe('Only without a sequence of yours: sequence frame rate ("23.976", "25"…)'),
         gapSeconds: z.number().min(0).optional().describe('Gap between takes in seconds (default 0)'),
         lowConfidence: z.number().min(0).max(1).optional().describe('Takes below this confidence get a red marker (default 0.6)'),
         dropNoCue: z.boolean().optional().describe('Leave out files with no cue (B-roll) instead of keeping them whole (default false)'),
@@ -247,13 +249,15 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
     {
       name: 'inspect_footage',
       description:
-        'FIRST STEP before any edit: read every clip\'s properties without decoding (size after rotation and pixel aspect, frame rate and the rate it was shot at, in-camera slow motion or time-lapse, log or HDR such as S-Log3 read from the camera\'s own metadata, variable frame rate, interlacing, codec, bit depth, camera model, timecode) and recommend the sequence (delivery frame and fps if given, else the most common size and normal-speed rate) and how each clip goes in: every clip that is not the sequence size is fit to frame (4K in Full HD = 50 %), other aspect ratios fill the frame. ' +
-        'Flags what needs a decision: clips whose rate does not divide the sequence rate (judder), high-frame-rate clips that can become slow motion (with the %), time-lapse clips, log footage that needs colour management or a LUT. rough_cut_by_cues, select_best_takes and score_footage run this themselves and use it (sequence fps, fit to frame), so their sequences no longer copy the first clip. Takes about 20 s for 176 clips; cached next to the footage.',
+        'FIRST STEP before any edit, after the user has created their sequence and imported the footage: read every clip\'s properties without decoding (size after rotation and pixel aspect, frame rate and the rate it was shot at, in-camera slow motion or time-lapse, log or HDR such as S-Log3 read from the camera\'s own metadata, variable frame rate, interlacing, codec, bit depth, camera model, timecode) and check them against the user\'s sequence (the active one, or templateSequence): frame size and rate come from it; every clip that is not that size is fit to frame (4K in a Full HD sequence = 50 %), other aspect ratios fill the frame. Only when no sequence is open does it recommend one from the footage. ' +
+        'Flags what needs a decision: clips whose rate does not divide the sequence rate (judder), high-frame-rate clips that can become slow motion (with the %), time-lapse clips, log footage that needs colour management or a LUT. rough_cut_by_cues, select_best_takes and score_footage do the same: their new sequence is an empty copy of the user\'s sequence (same frame, rate and colour settings; the original is never changed) and every clip is fit to its frame. Takes about 20 s for 176 clips; cached next to the footage.',
       inputSchema: z.object({
         sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project'),
         bin: z.string().optional().describe('Only the clips in this project bin'),
-        frame: z.string().optional().describe('Delivery frame: "1920x1080", "3840x2160", "9:16", "1:1"… Default: the most common clip size'),
-        fps: z.string().optional().describe('Delivery frame rate: "23.976", "25", "29.97", "59.94"… Default: the most common rate among normal-speed clips'),
+        templateSequence: z.string().optional().describe('Your sequence (you create it and import the footage): its frame size and frame rate decide fit to frame, and the new sequence is an empty copy of it with the same settings. Default: the active sequence'),
+        useMySequence: z.boolean().optional().describe('false: ignore any open sequence and recommend one from the footage instead (default true)'),
+        frame: z.string().optional().describe('Only without a sequence of yours: frame to compare against ("1920x1080", "9:16"…). Default: the most common clip size'),
+        fps: z.string().optional().describe('Only without a sequence of yours: frame rate to compare against. Default: the most common rate among normal-speed clips'),
         waitSeconds: z.number().min(1).max(600).optional().describe('How long to wait in this call before returning "running" (default 60)')
       })
     },
@@ -290,8 +294,10 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         bridgeSeconds: z.number().min(0).max(10).optional().describe('Join two segments when the score dips for less than this (default 2)'),
         sequenceName: z.string().optional().describe('Build a new sequence with this name holding the selects end to end, a marker on each (score, grade, camera move)'),
         order: z.enum(['file', 'score']).optional().describe('Segment order: by file name then time (default) or best score first'),
-        frame: z.string().optional().describe('Selects sequence frame ("1920x1080", "3840x2160"…). Default: from inspect_footage, the most common clip size; every other clip is fit to frame'),
-        fps: z.string().optional().describe('Selects sequence frame rate. Default: from inspect_footage'),
+        templateSequence: z.string().optional().describe('Your sequence (you create it and import the footage): its frame size and frame rate decide fit to frame, and the new sequence is an empty copy of it with the same settings. Default: the active sequence'),
+        useMySequence: z.boolean().optional().describe('false: ignore any open sequence and recommend one from the footage instead (default true)'),
+        frame: z.string().optional().describe('Only without a sequence of yours: selects sequence frame ("1920x1080"…); every other-size clip is fit to it'),
+        fps: z.string().optional().describe('Only without a sequence of yours: selects sequence frame rate'),
         gapSeconds: z.number().min(0).max(10).optional().describe('Gap between segments on the sequence (default 0)'),
         handles: z.number().min(0).max(5).optional().describe('Extra seconds kept before and after each segment (default 0)'),
         exportFormats: z.array(z.enum(['xml', 'fcpxml', 'edl', 'csv'])).optional().describe('Also write these files for another editor: xml (Premiere, Resolve), fcpxml (Final Cut), edl, csv'),
@@ -499,7 +505,9 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         keep: z.number().int().min(1).optional().describe('Takes to keep per group (default 1)'),
         sequenceName: z.string().optional().describe('Build a selects sequence with this name'),
         frame: z.string().optional().describe('Frame for the selects sequence (default 1920x1080)'),
-        fps: z.string().optional().describe('Sequence frame rate. Default: from inspect_footage'),
+        templateSequence: z.string().optional().describe('Your sequence (you create it and import the footage): its frame size and frame rate decide fit to frame, and the new sequence is an empty copy of it with the same settings. Default: the active sequence'),
+        useMySequence: z.boolean().optional().describe('false: ignore any open sequence and recommend one from the footage instead (default true)'),
+        fps: z.string().optional().describe('Only without a sequence of yours: sequence frame rate'),
         gapSeconds: z.number().min(0).optional(),
         waitSeconds: z.number().optional(),
         fast: z.boolean().optional()
@@ -657,7 +665,7 @@ export function layoutTakes(takes: MediaTake[], gap = 0, low = 0.6) {
 }
 
 /** JSX: a new sequence with the takes laid end to end, a marker on each (shared by rough_cut_by_cues and select_best_takes). */
-function takesSequenceJsx(seqName: string, files: string[], rows: ReturnType<typeof layoutTakes>, frame: { w: number; h: number } | null, gap: number, seed: string | null = null): string {
+function takesSequenceJsx(seqName: string, files: string[], rows: ReturnType<typeof layoutTakes>, frame: { w: number; h: number } | null, gap: number, seed: string | null = null, template: Template | null = null): string {
   // The sequence takes its frame rate from the clip it is created from: the seed is a clip at the recommended rate
   if (seed && !files.includes(seed)) files = [...files, seed];
   return `
@@ -667,10 +675,16 @@ var bin=__bin(seqName);
 var missing=[];for(var i=0;i<files.length;i++){if(!__byPath(files[i]))missing.push(files[i]);}
 if(missing.length)app.project.importFiles(missing,true,bin,false);
 var items={};for(var i=0;i<files.length;i++){var it=__byPath(files[i]);if(!it)return JSON.stringify({success:false,error:'import failed: '+files[i]});items[files[i]]=it;}
-var seq=app.project.createNewSequenceFromClips(seqName,[items[${q(seed)}||rows[0].file]],bin);
+var tpl=${q(template ? template.id : null)};var seq=null;var base=null;
+if(tpl){// An empty copy of the user's sequence: same frame, rate and colour settings; the original is not touched
+ base=__seq(null,tpl);if(!base)return JSON.stringify({success:false,error:'your sequence is gone'});
+ var before={};var sq=app.project.sequences;for(var i=0;i<sq.numSequences;i++)before[sq[i].sequenceID]=true;
+ base.clone();sq=app.project.sequences;for(var i=0;i<sq.numSequences;i++)if(!before[sq[i].sequenceID])seq=sq[i];
+ if(seq){seq.name=seqName;var mk=[];var m0=seq.markers.getFirstMarker();while(m0){mk.push(m0);m0=seq.markers.getNextMarker(m0);}for(var k=0;k<mk.length;k++){try{seq.markers.deleteMarker(mk[k]);}catch(eM){}}}
+}else seq=app.project.createNewSequenceFromClips(seqName,[items[${q(seed)}||rows[0].file]],bin);
 if(!seq)return JSON.stringify({success:false,error:'could not create the sequence'});
 var frame=${q(frame)};var frameSet=null;
-if(frame){try{var st=seq.getSettings();st.videoFrameWidth=frame.w;st.videoFrameHeight=frame.h;seq.setSettings(st);frameSet=seq.frameSizeHorizontal+'x'+seq.frameSizeVertical;}catch(eS){frameSet='failed: '+eS;}}
+if(frame&&!tpl){try{var st=seq.getSettings();st.videoFrameWidth=frame.w;st.videoFrameHeight=frame.h;seq.setSettings(st);frameSet=seq.frameSizeHorizontal+'x'+seq.frameSizeVertical;}catch(eS){frameSet='failed: '+eS;}}
 for(var v=0;v<seq.videoTracks.numTracks;v++){var vt=seq.videoTracks[v];for(var k=vt.clips.numItems-1;k>=0;k--)vt.clips[k].remove(false,false);}
 for(var a=0;a<seq.audioTracks.numTracks;a++){var at=seq.audioTracks[a];for(var k=at.clips.numItems-1;k>=0;k--)at.clips[k].remove(false,false);}
 var placed=0,errors=[];var cursor=0;var gap=${q(gap)};
@@ -693,7 +707,7 @@ for(var r=0;r<rows.length;r++){var row=rows[r];var it=items[row.file];
 }
 for(var f in items){try{items[f].clearInPoint();items[f].clearOutPoint();}catch(e7){}}
 try{app.project.openSequence(seq.sequenceID);}catch(e8){}
-return JSON.stringify({success:true,sequence:seq.name,sequenceId:seq.sequenceID,frame:frameSet,placed:placed,errors:errors});`;
+return JSON.stringify({success:true,sequence:seq.name,sequenceId:seq.sequenceID,frame:frameSet||(seq.frameSizeHorizontal+'x'+seq.frameSizeVertical),copiedFrom:base?base.name:null,placed:placed,errors:errors});`;
 }
 
 /**
@@ -733,7 +747,9 @@ async function roughCut(bridge: PremiereProTransport, args: Record<string, any>)
   const cli = ['take-khau-lenh', ...src.cli, '--json'];
   if (args.model) cli.push('--model', String(args.model));
   if (args.dropNoCue) cli.push('--bo-file-khong-lenh');
-  cli.push('--khung', String(args.frame ?? '1920x1080'));
+  const tpl = await readTemplate(bridge, args);
+  // Takes are framed for the user's sequence when one is open
+  cli.push('--khung', tpl ? `${tpl.w}x${tpl.h}` : String(args.frame ?? '1920x1080'));
   const job = await runDailies(cli, (args.waitSeconds ?? 45) * 1000, args.fast !== false);
   const problem = dailiesProblem(job, 'rough_cut_by_cues');
   if (problem) return problem;
@@ -747,11 +763,11 @@ async function roughCut(bridge: PremiereProTransport, args: Record<string, any>)
   const seqName = String(args.sequenceName || `Rough cut ${basename(folder)}`);
   const files = Array.from(new Set(rows.map((r) => r.file)));
   const frame = out.khung ? { w: out.khung.rong, h: out.khung.cao } : null;
-  const insp = await inspectFor(src, args.frame ?? '1920x1080', args.fps);
-  const seed = insp ? seedFile(files, insp.byFile, insp ? insp.sequence.fps.tu / insp.sequence.fps.mau : 0) : null;
-  const body = takesSequenceJsx(seqName, files, rows, frame, args.gapSeconds ?? 0, seed);
+  const insp = await inspectFor(src, args.frame ?? '1920x1080', args.fps, tpl);
+  const seed = insp && !tpl ? seedFile(files, insp.byFile, insp.sequence.fps.tu / insp.sequence.fps.mau) : null;
+  const body = takesSequenceJsx(seqName, files, rows, frame, args.gapSeconds ?? 0, seed, tpl);
   const r = await jsx(bridge, body, 600000);
-  return { tool: 'rough_cut_by_cues', ...r, ...summary, lowConfidence: rows.filter((x) => x.low).map((x) => x.name), inspection: inspectionNote(insp, seed) };
+  return { tool: 'rough_cut_by_cues', ...r, ...summary, lowConfidence: rows.filter((x) => x.low).map((x) => x.name), inspection: inspectionNote(insp, seed, tpl) };
 }
 
 async function describeSources(bridge: PremiereProTransport, args: Record<string, any>) {
@@ -821,6 +837,28 @@ export function layoutHits(hits: MediaHit[], query: string) {
   });
 }
 
+/** The user's own sequence (they create it and import the footage): its frame and rate decide the fit. */
+interface Template { id: string; name: string; w: number; h: number; fps: number }
+
+const TICKS = 254016000000;
+
+/** Frame rate for the Dailies CLI ("24000/1001", "25"). Pure, for tests. */
+export function fpsArg(fps: number): string {
+  const ntsc = Math.round(fps * 1.001);
+  if (Math.abs(fps - (ntsc * 1000) / 1001) < 0.002 && Math.abs(fps - Math.round(fps)) > 0.002) return `${ntsc * 1000}/1001`;
+  return String(Math.round(fps * 1000) / 1000);
+}
+
+/** Read the template sequence: templateSequence by name, else the active sequence; null when none is open. */
+async function readTemplate(bridge: PremiereProTransport, args: Record<string, any>): Promise<Template | null> {
+  if (args.useMySequence === false) return null;
+  const name = args.templateSequence ? String(args.templateSequence) : null;
+  const r = await jsx(bridge, `var s=${q(name)}?__seq(${q(name)},null):app.project.activeSequence;if(!s)return JSON.stringify({success:false});
+return JSON.stringify({success:true,id:s.sequenceID,name:s.name,w:s.frameSizeHorizontal,h:s.frameSizeVertical,tb:String(s.timebase)});`);
+  if (!r?.success || !r.w || !Number(r.tb)) return null;
+  return { id: r.id, name: r.name, w: r.w, h: r.h, fps: TICKS / Number(r.tb) };
+}
+
 /** Recommended sequence and per-file fit from `dailies thuoc-tinh`. */
 interface Inspection {
   sequence: { rong: number; cao: number; fps: { tu: number; mau: number }; fps_ten: string; ly_do: string };
@@ -830,7 +868,8 @@ interface Inspection {
   cache: string;
 }
 
-function inspectionCli(src: { cli: string[] }, frame?: string, fps?: string): string[] {
+function inspectionCli(src: { cli: string[] }, frame?: string, fps?: string, tpl?: Template | null): string[] {
+  if (tpl) { frame = `${tpl.w}x${tpl.h}`; fps = fpsArg(tpl.fps); }
   const cli = ['thuoc-tinh', ...src.cli.filter((x) => x !== '--cho-phep-goc'), '--json'];
   if (frame) cli.push('--khung', String(frame));
   if (fps) cli.push('--fps', String(fps));
@@ -844,8 +883,8 @@ function readInspection(out: any): Inspection {
 }
 
 /** Run the property scan for a building tool; null when it cannot (the tool then falls back to the first clip). */
-async function inspectFor(src: { cli: string[] }, frame?: string, fps?: string): Promise<Inspection | null> {
-  const job = await runDailies(inspectionCli(src, frame, fps), 180000, true);
+async function inspectFor(src: { cli: string[] }, frame?: string, fps?: string, tpl?: Template | null): Promise<Inspection | null> {
+  const job = await runDailies(inspectionCli(src, frame, fps, tpl), 180000, true);
   if (!job.done || job.code !== 0) return null;
   const out = parseDailies(job);
   return out?.sequence ? readInspection(out) : null;
@@ -856,24 +895,29 @@ export function seedFile(files: string[], rates: Map<string, { fps: number | nul
   return files.find((f) => { const r = rates.get(f)?.fps; return r !== null && r !== undefined && Math.abs(r - fps) < 0.01; }) ?? null;
 }
 
-function inspectionNote(insp: Inspection | null, seed: string | null) {
-  if (!insp) return { ran: false, note: 'property scan unavailable: the sequence copies the first clip; run inspect_footage to see why' };
+function inspectionNote(insp: Inspection | null, seed: string | null, tpl: Template | null = null) {
+  if (!insp) return { ran: false, note: tpl ? `property scan unavailable; the sequence is a copy of "${tpl.name}" but clips were not fitted` : 'property scan unavailable: the sequence copies the first clip; run inspect_footage to see why' };
   return {
-    ran: true, sequence: `${insp.sequence.rong}x${insp.sequence.cao} ${insp.sequence.fps_ten} fps (${insp.sequence.ly_do})`,
-    createdFrom: seed ? basename(seed) : 'first clip (no clip at the recommended rate)', todo: insp.todo, cache: insp.cache
+    ran: true,
+    sequence: tpl ? `copy of your sequence "${tpl.name}" (${tpl.w}x${tpl.h}, ${Math.round(tpl.fps * 1000) / 1000} fps); clips fit to its frame`
+      : `${insp.sequence.rong}x${insp.sequence.cao} ${insp.sequence.fps_ten} fps (${insp.sequence.ly_do}); no sequence of yours was open`,
+    createdFrom: tpl ? tpl.name : (seed ? basename(seed) : 'first clip (no clip at the recommended rate)'), todo: insp.todo, cache: insp.cache
   };
 }
 
 async function inspectFootage(bridge: PremiereProTransport, args: Record<string, any>) {
   const src = await mediaSource(bridge, args);
   if ('error' in src) return { success: false, tool: 'inspect_footage', error: src.error };
-  const job = await runDailies(inspectionCli(src, args.frame, args.fps), (args.waitSeconds ?? 60) * 1000, true);
+  const tpl = await readTemplate(bridge, args);
+  const job = await runDailies(inspectionCli(src, args.frame, args.fps, tpl), (args.waitSeconds ?? 60) * 1000, true);
   const problem = dailiesProblem(job, 'inspect_footage');
   if (problem) return problem;
   const out = parseDailies(job);
+  if (tpl) out.sequence = { ...out.sequence, ly_do: `sequence của anh "${tpl.name}"` };
   const attention = (out.clip ?? []).filter((c: any) => (c.chu_y ?? []).length);
   return {
-    success: true, tool: 'inspect_footage', sequence: out.sequence, totals: out.tong_hop, todo: out.viec_can_lam,
+    success: true, tool: 'inspect_footage', yourSequence: tpl ? { name: tpl.name, frame: `${tpl.w}x${tpl.h}`, fps: Math.round(tpl.fps * 1000) / 1000 } : null,
+    sequence: out.sequence, note: tpl ? undefined : 'No sequence of yours is open: these are recommendations from the footage. Create and open your sequence to fit against it.', totals: out.tong_hop, todo: out.viec_can_lam,
     attention: attention.slice(0, 40).map((c: any) => ({ clip: c.ten_file, size: `${c.rong_hien}x${c.cao_hien}`, fps: c.fps_so, shotAt: c.fps_quay,
       log: c.log, scale: c.xu_ly?.khung?.scale_phan_tram, notes: c.chu_y })),
     moreNeedingAttention: Math.max(0, attention.length - 40), seconds: out.giay_xu_ly, cache: out.file_ket_qua,
@@ -951,16 +995,17 @@ async function scoreFootage(bridge: PremiereProTransport, args: Record<string, a
   if (!rows.length) return { ...result, note: 'nothing reached the threshold; lower threshold or try kind b_roll' };
   if (args.sequenceName) {
     const files = Array.from(new Set(rows.map((r) => r.file)));
-    const insp = await inspectFor(src, args.frame, args.fps);
+    const tpl = await readTemplate(bridge, args);
+    const insp = await inspectFor(src, args.frame, args.fps, tpl);
     if (insp) for (const r of rows) {
       // Fit to frame: every clip not at the sequence size is scaled to it (4K in Full HD = 50 %)
       const sc = insp.byFile.get(r.file)?.scale;
       if (sc !== null && sc !== undefined && Math.abs(sc - 100) > 0.01) r.scale = sc;
     }
     const frame = insp ? { w: insp.sequence.rong, h: insp.sequence.cao } : null;
-    const seed = insp ? seedFile(files, insp.byFile, insp ? insp.sequence.fps.tu / insp.sequence.fps.mau : 0) : null;
-    result.sequence = await jsx(bridge, takesSequenceJsx(String(args.sequenceName), files, rows, frame, args.gapSeconds ?? 0, seed), 600000);
-    result.inspection = inspectionNote(insp, seed);
+    const seed = insp && !tpl ? seedFile(files, insp.byFile, insp.sequence.fps.tu / insp.sequence.fps.mau) : null;
+    result.sequence = await jsx(bridge, takesSequenceJsx(String(args.sequenceName), files, rows, frame, args.gapSeconds ?? 0, seed, tpl), 600000);
+    result.inspection = inspectionNote(insp, seed, tpl);
   }
   if (Array.isArray(args.exportFormats) && args.exportFormats.length) {
     const xcli = ['xuat', String(out.file_ket_qua), '--json', '--dinh-dang', args.exportFormats.join(','), '--thu-tu', order,
@@ -1850,7 +1895,8 @@ export function scoreTake(t: MediaTake & { khau_lenh_ra?: { loai?: string; chu?:
 async function selectBestTakes(bridge: PremiereProTransport, args: Record<string, any>) {
   const src = await mediaSource(bridge, args);
   if ('error' in src) return { success: false, tool: 'select_best_takes', error: src.error };
-  const job = await runDailies(['take-khau-lenh', ...src.cli, '--json', '--khung', String(args.frame ?? '1920x1080')], (args.waitSeconds ?? 45) * 1000, args.fast !== false);
+  const tpl = args.sequenceName ? await readTemplate(bridge, args) : null;
+  const job = await runDailies(['take-khau-lenh', ...src.cli, '--json', '--khung', tpl ? `${tpl.w}x${tpl.h}` : String(args.frame ?? '1920x1080')], (args.waitSeconds ?? 45) * 1000, args.fast !== false);
   const problem = dailiesProblem(job, 'select_best_takes');
   if (problem) return problem;
   const out = parseDailies(job);
@@ -1888,10 +1934,10 @@ async function selectBestTakes(bridge: PremiereProTransport, args: Record<string
     });
     const files = Array.from(new Set(rows.map((r) => r.file)));
     const frame = out.khung ? { w: out.khung.rong, h: out.khung.cao } : null;
-    const insp = await inspectFor(src, args.frame ?? '1920x1080', args.fps);
-    const seed = insp ? seedFile(files, insp.byFile, insp ? insp.sequence.fps.tu / insp.sequence.fps.mau : 0) : null;
-    sequence = await jsx(bridge, takesSequenceJsx(String(args.sequenceName), files, rows, frame, args.gapSeconds ?? 0, seed), 600000);
-    sequence.inspection = inspectionNote(insp, seed);
+    const insp = await inspectFor(src, args.frame ?? '1920x1080', args.fps, tpl);
+    const seed = insp && !tpl ? seedFile(files, insp.byFile, insp.sequence.fps.tu / insp.sequence.fps.mau) : null;
+    sequence = await jsx(bridge, takesSequenceJsx(String(args.sequenceName), files, rows, frame, args.gapSeconds ?? 0, seed, tpl), 600000);
+    sequence.inspection = inspectionNote(insp, seed, tpl);
   }
   return { success: true, tool: 'select_best_takes', takes: takes.length, picked: picked.map((p) => p.id), groups: report, sequence, note: 'Scores come from what was heard (cues, clarity, retake calls); always check the picks by eye.' };
 }
