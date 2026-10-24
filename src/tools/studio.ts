@@ -23,6 +23,7 @@ import { humanSize, insideFolder, jobFolderFor, moveToTrash, planCleanup, writeR
 export const studioToolNames = [
   'rough_cut_by_cues',
   'describe_sources',
+  'inspect_footage',
   'find_shots',
   'score_footage',
   'send_to_after_effects',
@@ -219,6 +220,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         allowOriginal: z.boolean().optional().describe('Clips without a proxy: read the original file instead of stopping (heavier on the machine)'),
         sequenceName: z.string().optional().describe('New sequence name (default "Rough cut <folder>")'),
         frame: z.string().optional().describe('Sequence frame: "1920x1080" (default), "9:16", "1:1", "4:5" or "<w>x<h>". The Dailies engine fits each take (4K → 50 %, other ratios fill the frame centred on faces) and the scale/position go into Motion'),
+        fps: z.string().optional().describe('Sequence frame rate ("23.976", "25", "29.97"…). Default: from inspect_footage, the most common rate among normal-speed clips'),
         gapSeconds: z.number().min(0).optional().describe('Gap between takes in seconds (default 0)'),
         lowConfidence: z.number().min(0).max(1).optional().describe('Takes below this confidence get a red marker (default 0.6)'),
         dropNoCue: z.boolean().optional().describe('Leave out files with no cue (B-roll) instead of keeping them whole (default false)'),
@@ -240,6 +242,19 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         mode: z.enum(['fast', 'deep']).optional().describe('fast (default) or deep'),
         writeToProject: z.boolean().optional().describe('Write descriptions into the Project panel for clips already imported from this folder (default true)'),
         waitSeconds: z.number().min(1).max(600).optional().describe('How long to wait in this call before returning "running" (default 45)')
+      })
+    },
+    {
+      name: 'inspect_footage',
+      description:
+        'FIRST STEP before any edit: read every clip\'s properties without decoding (size after rotation and pixel aspect, frame rate and the rate it was shot at, in-camera slow motion or time-lapse, log or HDR such as S-Log3 read from the camera\'s own metadata, variable frame rate, interlacing, codec, bit depth, camera model, timecode) and recommend the sequence (delivery frame and fps if given, else the most common size and normal-speed rate) and how each clip goes in: every clip that is not the sequence size is fit to frame (4K in Full HD = 50 %), other aspect ratios fill the frame. ' +
+        'Flags what needs a decision: clips whose rate does not divide the sequence rate (judder), high-frame-rate clips that can become slow motion (with the %), time-lapse clips, log footage that needs colour management or a LUT. rough_cut_by_cues, select_best_takes and score_footage run this themselves and use it (sequence fps, fit to frame), so their sequences no longer copy the first clip. Takes about 20 s for 176 clips; cached next to the footage.',
+      inputSchema: z.object({
+        sourceFolder: z.string().optional().describe('Footage folder. Default: the clips kept in the project'),
+        bin: z.string().optional().describe('Only the clips in this project bin'),
+        frame: z.string().optional().describe('Delivery frame: "1920x1080", "3840x2160", "9:16", "1:1"… Default: the most common clip size'),
+        fps: z.string().optional().describe('Delivery frame rate: "23.976", "25", "29.97", "59.94"… Default: the most common rate among normal-speed clips'),
+        waitSeconds: z.number().min(1).max(600).optional().describe('How long to wait in this call before returning "running" (default 60)')
       })
     },
     {
@@ -275,6 +290,8 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         bridgeSeconds: z.number().min(0).max(10).optional().describe('Join two segments when the score dips for less than this (default 2)'),
         sequenceName: z.string().optional().describe('Build a new sequence with this name holding the selects end to end, a marker on each (score, grade, camera move)'),
         order: z.enum(['file', 'score']).optional().describe('Segment order: by file name then time (default) or best score first'),
+        frame: z.string().optional().describe('Selects sequence frame ("1920x1080", "3840x2160"…). Default: from inspect_footage, the most common clip size; every other clip is fit to frame'),
+        fps: z.string().optional().describe('Selects sequence frame rate. Default: from inspect_footage'),
         gapSeconds: z.number().min(0).max(10).optional().describe('Gap between segments on the sequence (default 0)'),
         handles: z.number().min(0).max(5).optional().describe('Extra seconds kept before and after each segment (default 0)'),
         exportFormats: z.array(z.enum(['xml', 'fcpxml', 'edl', 'csv'])).optional().describe('Also write these files for another editor: xml (Premiere, Resolve), fcpxml (Final Cut), edl, csv'),
@@ -482,6 +499,7 @@ export function getStudioTools(existingNames: Set<string>): MCPTool[] {
         keep: z.number().int().min(1).optional().describe('Takes to keep per group (default 1)'),
         sequenceName: z.string().optional().describe('Build a selects sequence with this name'),
         frame: z.string().optional().describe('Frame for the selects sequence (default 1920x1080)'),
+        fps: z.string().optional().describe('Sequence frame rate. Default: from inspect_footage'),
         gapSeconds: z.number().min(0).optional(),
         waitSeconds: z.number().optional(),
         fast: z.boolean().optional()
@@ -562,6 +580,7 @@ export async function executeStudioTool(bridge: PremiereProTransport, name: stri
       case 'describe_sources': return await describeSources(bridge, args);
       case 'find_shots': return await findShots(bridge, args);
       case 'score_footage': return await scoreFootage(bridge, args);
+      case 'inspect_footage': return await inspectFootage(bridge, args);
       case 'send_to_after_effects': return await sendToAe(bridge, args);
       case 'return_from_after_effects': return await returnFromAe(bridge, args);
       case 'create_aspect_versions': return await aspectVersions(bridge, args);
@@ -638,7 +657,9 @@ export function layoutTakes(takes: MediaTake[], gap = 0, low = 0.6) {
 }
 
 /** JSX: a new sequence with the takes laid end to end, a marker on each (shared by rough_cut_by_cues and select_best_takes). */
-function takesSequenceJsx(seqName: string, files: string[], rows: ReturnType<typeof layoutTakes>, frame: { w: number; h: number } | null, gap: number): string {
+function takesSequenceJsx(seqName: string, files: string[], rows: ReturnType<typeof layoutTakes>, frame: { w: number; h: number } | null, gap: number, seed: string | null = null): string {
+  // The sequence takes its frame rate from the clip it is created from: the seed is a clip at the recommended rate
+  if (seed && !files.includes(seed)) files = [...files, seed];
   return `
 var seqName=${q(seqName)};if(__seq(seqName,null))return JSON.stringify({success:false,error:'A sequence named '+seqName+' already exists — pick another sequenceName (nothing was changed).'});
 var files=${q(files)};var rows=${q(rows)};
@@ -646,7 +667,7 @@ var bin=__bin(seqName);
 var missing=[];for(var i=0;i<files.length;i++){if(!__byPath(files[i]))missing.push(files[i]);}
 if(missing.length)app.project.importFiles(missing,true,bin,false);
 var items={};for(var i=0;i<files.length;i++){var it=__byPath(files[i]);if(!it)return JSON.stringify({success:false,error:'import failed: '+files[i]});items[files[i]]=it;}
-var seq=app.project.createNewSequenceFromClips(seqName,[items[rows[0].file]],bin);
+var seq=app.project.createNewSequenceFromClips(seqName,[items[${q(seed)}||rows[0].file]],bin);
 if(!seq)return JSON.stringify({success:false,error:'could not create the sequence'});
 var frame=${q(frame)};var frameSet=null;
 if(frame){try{var st=seq.getSettings();st.videoFrameWidth=frame.w;st.videoFrameHeight=frame.h;seq.setSettings(st);frameSet=seq.frameSizeHorizontal+'x'+seq.frameSizeVertical;}catch(eS){frameSet='failed: '+eS;}}
@@ -726,9 +747,11 @@ async function roughCut(bridge: PremiereProTransport, args: Record<string, any>)
   const seqName = String(args.sequenceName || `Rough cut ${basename(folder)}`);
   const files = Array.from(new Set(rows.map((r) => r.file)));
   const frame = out.khung ? { w: out.khung.rong, h: out.khung.cao } : null;
-  const body = takesSequenceJsx(seqName, files, rows, frame, args.gapSeconds ?? 0);
+  const insp = await inspectFor(src, args.frame ?? '1920x1080', args.fps);
+  const seed = insp ? seedFile(files, insp.byFile, insp ? insp.sequence.fps.tu / insp.sequence.fps.mau : 0) : null;
+  const body = takesSequenceJsx(seqName, files, rows, frame, args.gapSeconds ?? 0, seed);
   const r = await jsx(bridge, body, 600000);
-  return { tool: 'rough_cut_by_cues', ...r, ...summary, lowConfidence: rows.filter((x) => x.low).map((x) => x.name) };
+  return { tool: 'rough_cut_by_cues', ...r, ...summary, lowConfidence: rows.filter((x) => x.low).map((x) => x.name), inspection: inspectionNote(insp, seed) };
 }
 
 async function describeSources(bridge: PremiereProTransport, args: Record<string, any>) {
@@ -796,6 +819,66 @@ export function layoutHits(hits: MediaHit[], query: string) {
     t += Math.max(0, h.ra_giay - h.vao_giay);
     return row;
   });
+}
+
+/** Recommended sequence and per-file fit from `dailies thuoc-tinh`. */
+interface Inspection {
+  sequence: { rong: number; cao: number; fps: { tu: number; mau: number }; fps_ten: string; ly_do: string };
+  byFile: Map<string, { scale: number | null; fps: number | null; notes: string[] }>;
+  todo: string[];
+  totals: any;
+  cache: string;
+}
+
+function inspectionCli(src: { cli: string[] }, frame?: string, fps?: string): string[] {
+  const cli = ['thuoc-tinh', ...src.cli.filter((x) => x !== '--cho-phep-goc'), '--json'];
+  if (frame) cli.push('--khung', String(frame));
+  if (fps) cli.push('--fps', String(fps));
+  return cli;
+}
+
+function readInspection(out: any): Inspection {
+  const byFile = new Map<string, { scale: number | null; fps: number | null; notes: string[] }>();
+  for (const c of out.clip ?? []) byFile.set(c.file, { scale: c.xu_ly?.khung?.scale_phan_tram ?? null, fps: c.fps_so ?? null, notes: c.chu_y ?? [] });
+  return { sequence: out.sequence, byFile, todo: out.viec_can_lam ?? [], totals: out.tong_hop, cache: out.file_ket_qua };
+}
+
+/** Run the property scan for a building tool; null when it cannot (the tool then falls back to the first clip). */
+async function inspectFor(src: { cli: string[] }, frame?: string, fps?: string): Promise<Inspection | null> {
+  const job = await runDailies(inspectionCli(src, frame, fps), 180000, true);
+  if (!job.done || job.code !== 0) return null;
+  const out = parseDailies(job);
+  return out?.sequence ? readInspection(out) : null;
+}
+
+/** First file whose frame rate matches the recommended sequence rate, to create the sequence from. Pure, for tests. */
+export function seedFile(files: string[], rates: Map<string, { fps: number | null }>, fps: number): string | null {
+  return files.find((f) => { const r = rates.get(f)?.fps; return r !== null && r !== undefined && Math.abs(r - fps) < 0.01; }) ?? null;
+}
+
+function inspectionNote(insp: Inspection | null, seed: string | null) {
+  if (!insp) return { ran: false, note: 'property scan unavailable: the sequence copies the first clip; run inspect_footage to see why' };
+  return {
+    ran: true, sequence: `${insp.sequence.rong}x${insp.sequence.cao} ${insp.sequence.fps_ten} fps (${insp.sequence.ly_do})`,
+    createdFrom: seed ? basename(seed) : 'first clip (no clip at the recommended rate)', todo: insp.todo, cache: insp.cache
+  };
+}
+
+async function inspectFootage(bridge: PremiereProTransport, args: Record<string, any>) {
+  const src = await mediaSource(bridge, args);
+  if ('error' in src) return { success: false, tool: 'inspect_footage', error: src.error };
+  const job = await runDailies(inspectionCli(src, args.frame, args.fps), (args.waitSeconds ?? 60) * 1000, true);
+  const problem = dailiesProblem(job, 'inspect_footage');
+  if (problem) return problem;
+  const out = parseDailies(job);
+  const attention = (out.clip ?? []).filter((c: any) => (c.chu_y ?? []).length);
+  return {
+    success: true, tool: 'inspect_footage', sequence: out.sequence, totals: out.tong_hop, todo: out.viec_can_lam,
+    attention: attention.slice(0, 40).map((c: any) => ({ clip: c.ten_file, size: `${c.rong_hien}x${c.cao_hien}`, fps: c.fps_so, shotAt: c.fps_quay,
+      log: c.log, scale: c.xu_ly?.khung?.scale_phan_tram, notes: c.chu_y })),
+    moreNeedingAttention: Math.max(0, attention.length - 40), seconds: out.giay_xu_ly, cache: out.file_ket_qua,
+    next: 'Tell the user the sequence settings and the todo list before editing; ask about log colour handling and slow motion if they matter for the brief.'
+  };
 }
 
 export interface DailiesSegment {
@@ -868,7 +951,16 @@ async function scoreFootage(bridge: PremiereProTransport, args: Record<string, a
   if (!rows.length) return { ...result, note: 'nothing reached the threshold; lower threshold or try kind b_roll' };
   if (args.sequenceName) {
     const files = Array.from(new Set(rows.map((r) => r.file)));
-    result.sequence = await jsx(bridge, takesSequenceJsx(String(args.sequenceName), files, rows, null, args.gapSeconds ?? 0), 600000);
+    const insp = await inspectFor(src, args.frame, args.fps);
+    if (insp) for (const r of rows) {
+      // Fit to frame: every clip not at the sequence size is scaled to it (4K in Full HD = 50 %)
+      const sc = insp.byFile.get(r.file)?.scale;
+      if (sc !== null && sc !== undefined && Math.abs(sc - 100) > 0.01) r.scale = sc;
+    }
+    const frame = insp ? { w: insp.sequence.rong, h: insp.sequence.cao } : null;
+    const seed = insp ? seedFile(files, insp.byFile, insp ? insp.sequence.fps.tu / insp.sequence.fps.mau : 0) : null;
+    result.sequence = await jsx(bridge, takesSequenceJsx(String(args.sequenceName), files, rows, frame, args.gapSeconds ?? 0, seed), 600000);
+    result.inspection = inspectionNote(insp, seed);
   }
   if (Array.isArray(args.exportFormats) && args.exportFormats.length) {
     const xcli = ['xuat', String(out.file_ket_qua), '--json', '--dinh-dang', args.exportFormats.join(','), '--thu-tu', order,
@@ -1796,7 +1888,10 @@ async function selectBestTakes(bridge: PremiereProTransport, args: Record<string
     });
     const files = Array.from(new Set(rows.map((r) => r.file)));
     const frame = out.khung ? { w: out.khung.rong, h: out.khung.cao } : null;
-    sequence = await jsx(bridge, takesSequenceJsx(String(args.sequenceName), files, rows, frame, args.gapSeconds ?? 0), 600000);
+    const insp = await inspectFor(src, args.frame ?? '1920x1080', args.fps);
+    const seed = insp ? seedFile(files, insp.byFile, insp ? insp.sequence.fps.tu / insp.sequence.fps.mau : 0) : null;
+    sequence = await jsx(bridge, takesSequenceJsx(String(args.sequenceName), files, rows, frame, args.gapSeconds ?? 0, seed), 600000);
+    sequence.inspection = inspectionNote(insp, seed);
   }
   return { success: true, tool: 'select_best_takes', takes: takes.length, picked: picked.map((p) => p.id), groups: report, sequence, note: 'Scores come from what was heard (cues, clarity, retake calls); always check the picks by eye.' };
 }

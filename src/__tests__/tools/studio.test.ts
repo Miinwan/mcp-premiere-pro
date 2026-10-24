@@ -1,4 +1,4 @@
-import { layoutTakes, layoutHits, layoutSelects, getStudioTools, isStudioTool } from '../../tools/studio.js';
+import { layoutTakes, layoutHits, layoutSelects, seedFile, getStudioTools, isStudioTool } from '../../tools/studio.js';
 
 const take = (stt: number, file: string, n: number, vao: number, ra: number, tin = 0.9, ca = false) => ({
   stt, id: `m-${file}-t0${n}`, file: `/src/${file}`, ten_file: file, take_trong_file: n,
@@ -11,7 +11,7 @@ const take = (stt: number, file: string, n: number, vao: number, ra: number, tin
 describe('studio tools', () => {
   it('registers the four tools', () => {
     const names = getStudioTools(new Set()).map((t) => t.name);
-    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'find_shots', 'score_footage', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers', 'create_proxies', 'proxy_status', 'checkpoint_project', 'organize_project_bins', 'qc_before_export', 'transcribe_to_captions', 'detect_beats', 'cut_to_beats', 'select_best_takes', 'place_voiceover', 'normalize_loudness', 'review_cut', 'review_unused_media', 'clean_unused_media']);
+    expect(names).toEqual(['rough_cut_by_cues', 'describe_sources', 'inspect_footage', 'find_shots', 'score_footage', 'send_to_after_effects', 'return_from_after_effects', 'create_aspect_versions', 'add_color_layer', 'mako', 'add_color_matte', 'pr_guide', 'export_deliverables', 'export_status', 'add_scene_color_layers', 'sync_color_layers', 'create_proxies', 'proxy_status', 'checkpoint_project', 'organize_project_bins', 'qc_before_export', 'transcribe_to_captions', 'detect_beats', 'cut_to_beats', 'select_best_takes', 'place_voiceover', 'normalize_loudness', 'review_cut', 'review_unused_media', 'clean_unused_media']);
     expect(isStudioTool('rough_cut_by_cues')).toBe(true);
     expect(getStudioTools(new Set(['describe_sources'])).map((t) => t.name)).not.toContain('describe_sources');
   });
@@ -181,5 +181,13 @@ describe('layoutSelects', () => {
   });
   it('orders by score when asked', () => {
     expect(layoutSelects(clips, 'score').map((r) => r.score)).toEqual([0.95, 0.9, 0.86]);
+  });
+});
+
+describe('seedFile', () => {
+  it('picks the first clip at the recommended rate so the sequence gets that rate', () => {
+    const rates = new Map([['/a.mp4', { fps: 29.97 }], ['/b.mp4', { fps: 59.94 }], ['/c.mp4', { fps: 59.94 }], ['/d.mp4', { fps: null }]]);
+    expect(seedFile(['/a.mp4', '/b.mp4', '/c.mp4'], rates, 60000 / 1001)).toBe('/b.mp4');
+    expect(seedFile(['/a.mp4', '/d.mp4'], rates, 24000 / 1001)).toBeNull();
   });
 });
